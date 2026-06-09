@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements-docker.txt .
+COPY requirements.txt requirements-docker.txt ./
 RUN pip install --upgrade pip && pip install -r requirements-docker.txt
 
 COPY auth.py client.py config.py generate.py json_extract.py ping_model.py prompt.py render_md.py store.py web.py __main__.py ./
