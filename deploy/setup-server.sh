@@ -29,14 +29,19 @@ if [ ! -f .env ]; then
 fi
 
 echo "==> Subindo container (porta ${HOST_PORT})"
-docker compose down 2>/dev/null || true
-docker compose up -d --build
+docker-compose build
+docker-compose down 2>/dev/null || true
+docker-compose up -d
+docker builder prune -f
 
 echo ""
 echo "Pronto. Acesse: http://SEU_IP:${HOST_PORT}"
 echo "Exemplo: http://31.97.167.75:${HOST_PORT}"
 echo ""
-echo "Comandos úteis:"
-echo "  cd ${APP_DIR} && docker compose logs -f"
-echo "  cd ${APP_DIR} && docker compose restart"
-echo "  cd ${APP_DIR} && git pull && docker compose up -d --build"
+echo "Atualizar depois (mesmo fluxo do finmas):"
+echo "  cd ${APP_DIR}"
+echo "  git pull"
+echo "  docker-compose build"
+echo "  docker-compose down"
+echo "  docker-compose up -d"
+echo "  docker builder prune -f"
