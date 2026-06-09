@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <script>
+    (function () {
+      try {
+        var k = "trusicas-theme";
+        var t = localStorage.getItem(k);
+        if (t !== "light" && t !== "dark") t = "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ app_name }} — inglês com música</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="bg-mesh" aria-hidden="true"></div>
+
+  <header class="hero" id="site-header">
+    <div class="hero-shell">
+      <div id="admin-active-bar" class="admin-active-bar hidden" role="status" aria-live="polite">
+        <span class="admin-active-bar-dot" aria-hidden="true"></span>
+        Modo admin activo — pode criar, editar e apagar lições
+      </div>
+      <div id="admin-auth" class="admin-corner" aria-label="Acesso de edição">
+        <div id="admin-auth-guest">
+          <button type="button" id="btn-open-admin-modal" class="btn btn-secondary btn-sm btn-admin-entry">
+            Admin
+          </button>
+        </div>
+        <div id="admin-auth-user" class="admin-signed hidden">
+          <span class="admin-signed-pill" title="Sessão de administrador activa">
+            <span class="admin-signed-check" aria-hidden="true">✓</span>
+            Modo admin
+          </span>
+          <button type="button" id="btn-admin-logout" class="btn btn-sm btn-secondary">Sair</button>
+        </div>
+      </div>
+      <div class="hero-inner">
+      <div class="brand">
+        <div class="brand-copy">
+          <h1 class="brand-name">{{ app_name }}</h1>
+          <p class="brand-tagline">{{ app_tagline }}</p>
+        </div>
+      </div>
+
+      <div class="hero-toolbar">
+        <nav class="segmented" aria-label="Navegação principal">
+          <button type="button" class="segmented-btn active" data-view="create">
+            <span class="segmented-ico" aria-hidden="true">✦</span>
+            Nova lição
+          </button>
+          <button type="button" class="segmented-btn" data-view="library">
+            <span class="segmented-ico" aria-hidden="true">☰</span>
+            Biblioteca
+          </button>
+        </nav>
+        <div class="segmented theme-bar" role="group" aria-label="Tema da interface">
+          <button type="button" class="segmented-btn theme-choice" data-theme="dark" aria-pressed="true">
+            Escuro
+          </button>
+          <button type="button" class="segmented-btn theme-choice" data-theme="light" aria-pressed="false">
+            Claro
+          </button>
+        </div>
+      </div>
+    </div>
+    </div>
+  </header>
+
+  <div id="admin-toast" class="admin-toast hidden" role="status" aria-live="polite"></div>
+
+  <main class="shell">
+    <div id="view-create">
+      <section class="surface form-surface" id="create-form-surface">
+        <div class="surface-head">
+          <h2 class="surface-title">Criar lição</h2>
+          <p class="surface-desc">Cole a letra em inglês. Opcional: título e artista ajudam o modelo e a sua biblioteca.</p>
+        </div>
+        <p id="read-only-banner" class="read-only-banner" role="status">
+          Modo leitura — qualquer pessoa pode ver lições. Para criar, editar ou apagar, entre com a senha de admin.
+        </p>
+        <div id="edit-mode-banner" class="edit-mode-banner hidden" role="status">
+          <p id="edit-mode-banner-text" class="edit-mode-banner-text"></p>
+          <button type="button" id="btn-cancel-edit" class="btn btn-sm btn-secondary">Cancelar edição</button>
+        </div>
+        <label class="field-label" for="lyrics">Letra (inglês)</label>
+        <textarea id="lyrics" class="input textarea" rows="14" spellcheck="false" placeholder="Paste the English lyrics here…"></textarea>
+        <div class="field-row">
+          <div class="field">
+            <label class="field-label" for="title">Título <span class="opt">opcional</span></label>
+            <input id="title" class="input" type="text" autocomplete="off" placeholder="ex.: Something in the Way" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="artist">Artista <span class="opt">opcional</span></label>
+            <input id="artist" class="input" type="text" autocomplete="off" placeholder="ex.: Nirvana" />
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="toolbar-actions">
+            <button type="button" id="btn-save-lesson" class="btn btn-secondary hidden">Salvar alterações</button>
+            <button type="button" id="btn-generate" class="btn btn-primary">Gerar lição</button>
+          </div>
+          <div class="generate-status-row">
+            <span id="generate-spinner" class="generate-spinner hidden" aria-hidden="true"></span>
+            <span id="status" class="pill-status" aria-live="polite"></span>
+          </div>
+        </div>
+      </section>
+
+      <section id="error-panel" class="surface surface-alert hidden">
+        <div class="alert-head">
+          <span class="alert-badge">Erro</span>
+          <p id="error-text" class="alert-msg"></p>
+        </div>
+        <details class="details-debug">
+          <summary>Resposta bruta do modelo (debug)</summary>
+          <pre id="error-raw" class="code-block"></pre>
+        </details>
+      </section>
+
+      <section id="result" class="hidden">
+        <div class="result-head">
+          <p id="result-meta" class="meta-chip hidden"></p>
+        </div>
+        <div class="surface surface-tabs">
+          <nav class="tabs-rail" role="tablist" aria-label="Seções da lição">
+            <button type="button" class="tab-chip active" data-tab="translation" role="tab" aria-selected="true">Tradução</button>
+            <button type="button" class="tab-chip" data-tab="structures" role="tab" aria-selected="false">Estruturas</button>
+            <button type="button" class="tab-chip" data-tab="vocabulary" role="tab" aria-selected="false">Vocabulário</button>
+            <button type="button" class="tab-chip" data-tab="examples" role="tab" aria-selected="false">Exemplos</button>
+            <button type="button" class="tab-chip" data-tab="curiosities" role="tab" aria-selected="false">Curiosidades</button>
+          </nav>
+          <div class="tab-body">
+            <div id="panel-translation" class="tab-panel active" role="tabpanel"></div>
+            <div id="panel-structures" class="tab-panel" role="tabpanel" hidden></div>
+            <div id="panel-vocabulary" class="tab-panel" role="tabpanel" hidden></div>
+            <div id="panel-examples" class="tab-panel" role="tabpanel" hidden></div>
+            <div id="panel-curiosities" class="tab-panel" role="tabpanel" hidden></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="view-library" class="hidden">
+      <section class="surface">
+        <div class="library-head">
+          <div>
+            <h2 class="surface-title">Biblioteca</h2>
+            <p class="surface-desc">Todas as lições ficam no SQLite local, agrupadas por artista (A–Z). Clique numa linha para ver; editar ou excluir exige login de admin.</p>
+          </div>
+          <div class="library-head-controls">
+            <label class="visually-hidden" for="library-search">Buscar na biblioteca</label>
+            <input
+              type="search"
+              id="library-search"
+              class="input library-search"
+              placeholder="Artista ou música…"
+              autocomplete="off"
+              enterkeyhint="search"
+            />
+            <button type="button" id="btn-refresh-library" class="btn btn-secondary">Atualizar lista</button>
+          </div>
+        </div>
+        <div id="library-status" class="pill-status pill-status-block" aria-live="polite"></div>
+        <div class="datagrid-wrap datagrid-wrap-library">
+          <table class="datagrid datagrid-library" id="library-table">
+            <thead>
+              <tr>
+                <th>Música</th>
+                <th>Prévia da letra</th>
+                <th class="th-actions"></th>
+              </tr>
+            </thead>
+            <tbody id="library-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div id="admin-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title" hidden>
+    <button type="button" class="modal-backdrop" data-close-admin-modal aria-label="Fechar"></button>
+    <div class="modal-panel" role="document">
+      <header class="modal-head">
+        <h2 id="admin-modal-title" class="modal-title">Administração</h2>
+        <button type="button" class="modal-close" data-close-admin-modal aria-label="Fechar">×</button>
+      </header>
+      <form id="admin-login-form" class="modal-body" autocomplete="on">
+        <p class="modal-desc">
+          Entre com a senha para criar, editar e apagar lições. Visitantes continuam só a ver o conteúdo.
+        </p>
+        <p id="admin-modal-notice" class="modal-notice hidden" role="status"></p>
+        <p id="admin-modal-error" class="modal-error hidden" role="alert"></p>
+        <label class="field-label" for="admin-password">Senha</label>
+        <input
+          type="password"
+          id="admin-password"
+          class="input"
+          placeholder="Senha de administrador"
+          autocomplete="current-password"
+        />
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-admin-modal>Cancelar</button>
+          <button type="submit" id="btn-admin-login" class="btn btn-primary">Entrar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

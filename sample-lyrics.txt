@@ -1,0 +1,2 @@
+This is a sample line for testing the CLI.
+Here is another line with a contraction: I'm learning English.
