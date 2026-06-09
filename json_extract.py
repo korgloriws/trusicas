@@ -6,9 +6,7 @@ from typing import Any
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
-    """
-    Parse JSON from model output. Handles optional ```json fences and leading junk.
-    """
+
     if text is None:
         raise ValueError("Model output is empty (null).")
     cleaned = str(text).strip()
