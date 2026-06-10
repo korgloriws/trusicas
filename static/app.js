@@ -14,6 +14,10 @@ function esc(s) {
 let editingLessonId = null;
 /** Deep copy of the lesson last shown — merge base for save; used on cancel to re-render. */
 let lastLoadedLessonSnapshot = null;
+/** Opened via random training spin. */
+let trainingModeActive = false;
+/** All tracks for the random trainer ({ id, title, artist, label }). */
+let libraryTrainingPool = [];
 
 let isAdmin = false;
 let adminConfigured = false;
@@ -218,6 +222,135 @@ function clearEditingMode() {
   syncEditToolbar();
 }
 
+function formatTrainLabel(entry) {
+  if (!entry) return "—";
+  const title = entry.title && String(entry.title).trim() ? entry.title : "Sem título";
+  const artist = entry.artist && String(entry.artist).trim() ? entry.artist : "Artista desconhecido";
+  return `${artist} — ${title}`;
+}
+
+function setTrainingBanner(on, label) {
+  const wrap = $("training-mode-banner");
+  const text = $("training-mode-banner-text");
+  if (!wrap || !text) return;
+  if (!on) {
+    wrap.classList.add("hidden");
+    text.textContent = "";
+    return;
+  }
+  wrap.classList.remove("hidden");
+  text.textContent = label
+    ? `Modo treino · ${label}. Use as abas para praticar vocabulário, estruturas e exemplos.`
+    : "Modo treino — pratique inglês com esta faixa.";
+}
+
+function clearTrainingMode() {
+  trainingModeActive = false;
+  setTrainingBanner(false);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function lessonToTrainEntry(r) {
+  const title = r.title_hint && String(r.title_hint).trim() ? r.title_hint : "Sem título";
+  const artist = r.artist_hint && String(r.artist_hint).trim() ? r.artist_hint : "";
+  return {
+    id: r.id,
+    title,
+    artist,
+    label: formatTrainLabel({ title, artist: artist || "Artista desconhecido" }),
+  };
+}
+
+async function refreshTrainingPool() {
+  try {
+    const res = await apiFetch("/api/lessons?flat=1&limit=2000");
+    const data = await res.json();
+    if (!res.ok || !data.ok) return [];
+    const lessons = data.lessons || [];
+    libraryTrainingPool = lessons.map(lessonToTrainEntry);
+    return libraryTrainingPool;
+  } catch (_e) {
+    return libraryTrainingPool;
+  }
+}
+
+function syncTrainPoolHint() {
+  const hint = $("train-pool-hint");
+  const btn = $("btn-random-train");
+  if (!hint) return;
+  const n = libraryTrainingPool.length;
+  if (n === 0) {
+    hint.textContent = "Adicione lições à biblioteca para treinar.";
+    if (btn) btn.disabled = true;
+  } else if (n === 1) {
+    hint.textContent = "1 faixa disponível.";
+    if (btn) btn.disabled = false;
+  } else {
+    hint.textContent = `${n} faixas na roleta.`;
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function spinRandomTraining() {
+  const btn = $("btn-random-train");
+  const roulette = $("train-roulette");
+  const labelEl = $("train-roulette-label");
+  const st = $("library-status");
+  if (btn) btn.disabled = true;
+
+  let pool = libraryTrainingPool;
+  if (!pool.length) {
+    pool = await refreshTrainingPool();
+    syncTrainPoolHint();
+  }
+  if (!pool.length) {
+    if (st) st.textContent = "Nenhuma faixa na biblioteca para treinar.";
+    if (btn) btn.disabled = true;
+    return;
+  }
+
+  if (pool.length === 1) {
+    await openLesson(pool[0].id, { training: true, trainLabel: pool[0].label });
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  if (roulette) {
+    roulette.classList.remove("hidden", "is-final");
+    roulette.hidden = false;
+  }
+  if (labelEl) labelEl.textContent = "…";
+
+  const finalIdx = Math.floor(Math.random() * pool.length);
+  const steps = Math.min(32, Math.max(14, pool.length * 3));
+
+  for (let i = 0; i < steps; i++) {
+    const idx = i === steps - 1 ? finalIdx : Math.floor(Math.random() * pool.length);
+    if (labelEl) {
+      labelEl.textContent = pool[idx].label;
+      labelEl.style.animation = "none";
+      void labelEl.offsetWidth;
+      labelEl.style.animation = "";
+    }
+    await sleep(55 + Math.floor((i * i) / 2.2));
+  }
+
+  if (roulette) roulette.classList.add("is-final");
+  const picked = pool[finalIdx];
+  if (st) st.textContent = `Treino: ${picked.label}`;
+  await sleep(420);
+  await openLesson(picked.id, { training: true, trainLabel: picked.label });
+  if (roulette) {
+    roulette.classList.add("hidden");
+    roulette.classList.remove("is-final");
+    roulette.hidden = true;
+  }
+  if (btn) btn.disabled = false;
+}
+
 function syncEditToolbar() {
   const b = $("btn-save-lesson");
   if (b) b.classList.toggle("hidden", editingLessonId == null || !isAdmin);
@@ -245,6 +378,7 @@ function setView(name) {
     create.classList.add("hidden");
     lib.classList.remove("hidden");
     loadLibrary();
+    if (!libraryTrainingPool.length) refreshTrainingPool().then(() => syncTrainPoolHint());
   } else {
     lib.classList.add("hidden");
     create.classList.remove("hidden");
@@ -758,15 +892,30 @@ async function loadLibrary() {
     let stMsg = `${total} registro(s) · ${groups.filter((g) => (g.lessons || []).length).length} artista(s).`;
     if (query) stMsg += ` · filtro: «${query}»`;
     st.textContent = stMsg;
+    if (!query) {
+      const flat = [];
+      for (const g of groups) {
+        for (const r of g.lessons || []) flat.push(lessonToTrainEntry(r));
+      }
+      libraryTrainingPool = flat;
+      syncTrainPoolHint();
+    }
   } catch (e) {
     st.textContent = String(e);
   }
 }
 
-async function openLesson(id) {
+async function openLesson(id, opts = {}) {
+  const training = Boolean(opts.training);
   clearEditingMode();
+  if (training) {
+    trainingModeActive = true;
+    setTrainingBanner(true, opts.trainLabel || "");
+  } else {
+    clearTrainingMode();
+  }
   const st = $("status");
-  st.textContent = "Abrindo lição…";
+  st.textContent = training ? "A preparar treino…" : "Abrindo lição…";
   try {
     const res = await apiFetch("/api/lessons/" + encodeURIComponent(String(id)));
     const data = await res.json();
@@ -779,10 +928,20 @@ async function openLesson(id) {
     $("artist").value = data.artist_hint || "";
     displayLesson(data.lesson);
     $("error-panel").classList.add("hidden");
-    setResultMeta(`Lição #${data.id} · ${formatLibraryDate(data.created_at)}`);
+    const title = data.title_hint && String(data.title_hint).trim() ? data.title_hint : "Sem título";
+    const artist = data.artist_hint && String(data.artist_hint).trim() ? data.artist_hint : "";
+    const trainLabel = opts.trainLabel || formatTrainLabel({ title, artist: artist || "Artista desconhecido" });
+    if (training) {
+      setTrainingBanner(true, trainLabel);
+      setResultMeta(`Treino · ${trainLabel}`);
+      setTab("vocabulary");
+    } else {
+      setResultMeta(`Lição #${data.id} · ${formatLibraryDate(data.created_at)}`);
+      setTab("translation");
+    }
     setView("create");
     $("result").scrollIntoView({ behavior: "smooth", block: "start" });
-    st.textContent = "";
+    st.textContent = training ? "Boa prática!" : "";
   } catch (e) {
     st.textContent = String(e);
   }
@@ -849,6 +1008,13 @@ $("btn-refresh-library").addEventListener("click", () => {
   if (librarySearchTimer) clearTimeout(librarySearchTimer);
   librarySearchTimer = null;
   loadLibrary();
+});
+
+$("btn-random-train")?.addEventListener("click", () => spinRandomTraining());
+$("btn-another-random")?.addEventListener("click", () => spinRandomTraining());
+$("btn-exit-training")?.addEventListener("click", () => {
+  clearTrainingMode();
+  $("status").textContent = "";
 });
 
 const libSearch = $("library-search");

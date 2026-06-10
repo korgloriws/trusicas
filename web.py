@@ -49,7 +49,7 @@ def create_app() -> Flask:
         return render_template(
             "index.html",
             app_name="Trusicas",
-            app_tagline="Inglês com música — lições claras, salvas na sua máquina.",
+            app_tagline="Inglês com música",
         )
 
     @app.get("/api/auth/me")

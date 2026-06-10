@@ -80,6 +80,13 @@
           <p id="edit-mode-banner-text" class="edit-mode-banner-text"></p>
           <button type="button" id="btn-cancel-edit" class="btn btn-sm btn-secondary">Cancelar edição</button>
         </div>
+        <div id="training-mode-banner" class="training-mode-banner hidden" role="status">
+          <p id="training-mode-banner-text" class="training-mode-banner-text"></p>
+          <div class="training-mode-actions">
+            <button type="button" id="btn-another-random" class="btn btn-sm btn-primary">Outra faixa</button>
+            <button type="button" id="btn-exit-training" class="btn btn-sm btn-secondary">Sair do treino</button>
+          </div>
+        </div>
         <label class="field-label" for="lyrics">Letra (inglês)</label>
         <textarea id="lyrics" class="input textarea" rows="14" spellcheck="false" placeholder="Paste the English lyrics here…"></textarea>
         <div class="field-row">
@@ -143,7 +150,7 @@
         <div class="library-head">
           <div>
             <h2 class="surface-title">Biblioteca</h2>
-            <p class="surface-desc">Todas as lições ficam no SQLite local, agrupadas por artista (A–Z). Clique numa linha para ver; editar ou excluir exige login de admin.</p>
+            <p class="surface-desc">Abra uma lição ou use o treino aleatório para praticar inglês com uma faixa da sua coleção.</p>
           </div>
           <div class="library-head-controls">
             <label class="visually-hidden" for="library-search">Buscar na biblioteca</label>
@@ -159,6 +166,19 @@
           </div>
         </div>
         <div id="library-status" class="pill-status pill-status-block" aria-live="polite"></div>
+        <section class="train-panel" aria-label="Treino aleatório">
+          <div class="train-panel-copy">
+            <h3 class="train-panel-title">Treino aleatório</h3>
+            <p class="train-panel-desc">A roleta percorre as faixas da biblioteca e para numa música para você treinar vocabulário, estruturas e exemplos.</p>
+          </div>
+          <div class="train-panel-action">
+            <button type="button" id="btn-random-train" class="btn btn-primary btn-train-spin">
+              <span class="btn-train-ico" aria-hidden="true">🎲</span>
+              Sortear faixa
+            </button>
+            <p id="train-pool-hint" class="train-pool-hint muted"></p>
+          </div>
+        </section>
         <div class="datagrid-wrap datagrid-wrap-library">
           <table class="datagrid datagrid-library" id="library-table">
             <thead>
@@ -174,6 +194,14 @@
       </section>
     </div>
   </main>
+
+  <div id="train-roulette" class="train-roulette-overlay hidden" aria-live="polite" aria-atomic="true" hidden>
+    <div class="train-roulette-card">
+      <span class="train-roulette-kicker">Treino aleatório</span>
+      <span class="train-roulette-label" id="train-roulette-label">—</span>
+      <span class="train-roulette-sub">Sorteando…</span>
+    </div>
+  </div>
 
   <div id="admin-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title" hidden>
     <button type="button" class="modal-backdrop" data-close-admin-modal aria-label="Fechar"></button>
