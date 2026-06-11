@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import sqlite3
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +14,7 @@ from typing import Any
 from config import ensure_env_loaded
 
 _SQLITE_MAGIC = b"SQLite format 3\x00"
+_db_lock = threading.RLock()
 
 
 def _project_root() -> Path:
@@ -28,12 +31,26 @@ def get_db_path() -> Path:
     return data_dir / "lessons.sqlite"
 
 
-def connect() -> sqlite3.Connection:
-    path = get_db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+class _DbSession:
+    """Uma conexão por vez — necessário para restore no Windows (WAL bloqueado)."""
+
+    def __enter__(self) -> sqlite3.Connection:
+        _db_lock.acquire()
+        path = get_db_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        try:
+            self._conn.close()
+        finally:
+            _db_lock.release()
+
+
+def connect() -> _DbSession:
+    return _DbSession()
 
 
 def init_db() -> None:
@@ -310,6 +327,30 @@ def _sqlite_sidecars(path: Path) -> list[Path]:
     return [Path(f"{path}-wal"), Path(f"{path}-shm")]
 
 
+def _unlink_with_retry(path: Path, *, attempts: int = 8) -> None:
+    last_err: OSError | None = None
+    for i in range(attempts):
+        try:
+            path.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            last_err = e
+            if i < attempts - 1:
+                time.sleep(0.05 * (2**i))
+    if last_err is not None:
+        raise last_err
+
+
+def _checkpoint_and_close(path: Path) -> None:
+    conn = sqlite3.connect(str(path), check_same_thread=False)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(FULL)")
+    finally:
+        conn.close()
+
+
 def export_db_bytes() -> bytes:
     """Consolidate WAL and return a portable SQLite file snapshot."""
     init_db()
@@ -328,26 +369,50 @@ def restore_db_bytes(data: bytes) -> dict[str, Any]:
     path = get_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    if path.is_file():
-        backup_copy = path.with_name(f"{path.stem}.before-restore-{stamp}{path.suffix}")
-        shutil.copy2(path, backup_copy)
+
+    with _db_lock:
+        if path.is_file():
+            _checkpoint_and_close(path)
+            backup_copy = path.with_name(f"{path.stem}.before-restore-{stamp}{path.suffix}")
+            shutil.copy2(path, backup_copy)
+            for sidecar in _sqlite_sidecars(path):
+                if sidecar.is_file():
+                    _unlink_with_retry(sidecar)
+
+        path.write_bytes(data)
         for sidecar in _sqlite_sidecars(path):
             if sidecar.is_file():
-                sidecar.unlink()
+                _unlink_with_retry(sidecar)
 
-    path.write_bytes(data)
-    for sidecar in _sqlite_sidecars(path):
-        if sidecar.is_file():
-            sidecar.unlink()
-
-    init_db()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='lessons'"
-        ).fetchone()
-        if row is None:
-            raise ValueError("Backup sem tabela «lessons» — não é um backup Trusicas válido.")
-        count_row = conn.execute("SELECT COUNT(*) AS n FROM lessons").fetchone()
-        lesson_count = int(count_row["n"]) if count_row else 0
+        conn = sqlite3.connect(str(path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lessons (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  title_hint TEXT,
+                  artist_hint TEXT,
+                  lyrics_en TEXT NOT NULL,
+                  model TEXT,
+                  lesson_json TEXT NOT NULL,
+                  raw_response TEXT
+                )
+                """
+            )
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='lessons'"
+            ).fetchone()
+            if row is None:
+                raise ValueError(
+                    "Backup sem tabela «lessons» — não é um backup Trusicas válido."
+                )
+            count_row = conn.execute("SELECT COUNT(*) AS n FROM lessons").fetchone()
+            lesson_count = int(count_row["n"]) if count_row else 0
+            conn.commit()
+        finally:
+            conn.close()
 
     return {"lessons": lesson_count, "path": str(path)}

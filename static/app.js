@@ -282,7 +282,7 @@ function setTrainingBanner(on, label) {
   }
   wrap.classList.remove("hidden");
   text.textContent = label
-    ? `Modo treino · ${label}. Use as abas para praticar vocabulário, estruturas e exemplos.`
+    ? `Modo treino · ${label}. Comece pela tradução ou use as outras abas para praticar.`
     : "Modo treino — pratique inglês com esta faixa.";
 }
 
@@ -1104,7 +1104,7 @@ async function openLesson(id, opts = {}) {
     if (training) {
       setTrainingBanner(true, trainLabel);
       setResultMeta(`Treino · ${trainLabel}`);
-      setTab("vocabulary");
+      setTab("translation");
     } else {
       setResultMeta(`Lição #${data.id} · ${formatLibraryDate(data.created_at)}`);
       setTab("translation");
