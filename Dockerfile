@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt requirements-docker.txt ./
 RUN pip install --upgrade pip && pip install -r requirements-docker.txt
 
-COPY auth.py client.py config.py generate.py json_extract.py ping_model.py prompt.py render_md.py store.py web.py __main__.py ./
+# Todos os módulos .py na raiz (evita esquecer ficheiros novos, ex. translation_stanzas.py)
+COPY *.py ./
 COPY templates/ templates/
 COPY static/ static/
 
