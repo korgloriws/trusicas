@@ -2,8 +2,21 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
+
+_PROJECT_ROOT = Path(__file__).resolve().parent
+_ENV_LOADED = False
+
+
+def ensure_env_loaded() -> None:
+    """Load trusicas/.env regardless of the process working directory."""
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+    load_dotenv(_PROJECT_ROOT / ".env")
+    _ENV_LOADED = True
 
 
 # Default max completion tokens for lesson generation (OpenRouter may return 400 if the value is too large).
@@ -27,7 +40,7 @@ class Settings:
 
 
 def load_settings(*, temperature: float | None = None) -> Settings:
-    load_dotenv()
+    ensure_env_loaded()
     api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     if not api_key:
         raise RuntimeError(

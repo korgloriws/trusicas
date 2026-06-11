@@ -7,6 +7,7 @@ from client import complete_chat
 from config import load_settings
 from json_extract import extract_json_object
 from prompt import SYSTEM_PROMPT, build_user_prompt
+from translation_stanzas import align_translation_stanzas
 
 
 @dataclass
@@ -48,4 +49,8 @@ def generate_lesson(
         return GenerateResult(
             ok=False, lesson=None, raw=raw, error=f"{type(e).__name__}: {e}", model_used=model_used
         )
+    translation = lesson.get("translation")
+    if isinstance(translation, dict):
+        lesson = dict(lesson)
+        lesson["translation"] = align_translation_stanzas(text, translation)
     return GenerateResult(ok=True, lesson=lesson, raw=raw, error=None, model_used=model_used)

@@ -133,7 +133,12 @@ function syncAdminUi() {
   }
 
   const gen = $("btn-generate");
+  const newLesson = $("btn-new-lesson");
   if (gen) gen.disabled = !isAdmin;
+  if (newLesson) newLesson.disabled = !isAdmin;
+
+  const backupPanel = $("library-backup-panel");
+  if (backupPanel) backupPanel.classList.toggle("hidden", !isAdmin);
 
   if (!isAdmin && editingLessonId != null) {
     const snap = lastLoadedLessonSnapshot;
@@ -220,6 +225,43 @@ function clearEditingMode() {
   editingLessonId = null;
   setEditBanner(false);
   syncEditToolbar();
+}
+
+/** Limpa o formulário «Nova lição» para colar a próxima música. */
+function clearNewLessonForm({ hideResult = true, focusLyrics = true } = {}) {
+  const lyricsEl = $("lyrics");
+  const titleEl = $("title");
+  const artistEl = $("artist");
+  if (lyricsEl) lyricsEl.value = "";
+  if (titleEl) titleEl.value = "";
+  if (artistEl) artistEl.value = "";
+  clearEditingMode();
+  clearTrainingMode();
+  $("error-panel")?.classList.add("hidden");
+  if (hideResult) {
+    $("result")?.classList.add("hidden");
+    setResultMeta("");
+    lastLoadedLessonSnapshot = null;
+  }
+  if (focusLyrics && lyricsEl && isAdmin) {
+    setTimeout(() => lyricsEl.focus(), 50);
+  }
+}
+
+function startNextLessonAfterGenerate(saved, { title = "", artist = "" } = {}) {
+  const titleHint = String(title).trim() || "Sem título";
+  const artistHint = String(artist).trim();
+  clearNewLessonForm({ hideResult: false, focusLyrics: true });
+  const status = $("status");
+  if (saved && saved.id != null) {
+    const label = artistHint ? `${artistHint} — ${titleHint}` : titleHint;
+    if (status) {
+      status.textContent = `«${label}» guardada (#${saved.id}). Cole a próxima letra acima.`;
+    }
+  } else if (status) {
+    status.textContent = "Pronto. Cole a próxima letra acima.";
+  }
+  $("create-form-surface")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function formatTrainLabel(entry) {
@@ -389,25 +431,160 @@ document.querySelectorAll(".segmented-btn[data-view]").forEach((b) => {
   b.addEventListener("click", () => setView(b.dataset.view));
 });
 
+function normalizeLyricsNewlines(text) {
+  return String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function parseLyricStanzas(lyricsText) {
+  const normalized = normalizeLyricsNewlines(lyricsText).trim();
+  if (!normalized) return [];
+  return normalized
+    .split(/\n(?:[ \t]*\n)+/)
+    .map((block) =>
+      block
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+    )
+    .filter((stanza) => stanza.length > 0);
+}
+
+function stanzaBreakIndices(lyricsEn) {
+  const stanzas = parseLyricStanzas(lyricsEn);
+  if (stanzas.length <= 1) return new Set();
+  const breaks = new Set();
+  let idx = 0;
+  for (let s = 0; s < stanzas.length - 1; s++) {
+    idx += stanzas[s].length;
+    breaks.add(idx - 1);
+  }
+  return breaks;
+}
+
+function wholePtPreservesStanzas(wholePt, stanzaCount) {
+  if (stanzaCount <= 1) return true;
+  const normalized = normalizeLyricsNewlines(wholePt).trim();
+  if (!normalized) return false;
+  const blocks = normalized.split(/\n(?:[ \t]*\n)+/).filter((b) => b.trim());
+  return blocks.length >= stanzaCount;
+}
+
+function buildWholePtFromLines(lyricsEn, lineByLine) {
+  const stanzas = parseLyricStanzas(lyricsEn);
+  const rows = Array.isArray(lineByLine) ? lineByLine : [];
+  if (!stanzas.length) {
+    return rows
+      .map((row) => (row && typeof row === "object" ? String(row.pt || "").trim() : ""))
+      .filter(Boolean)
+      .join("\n");
+  }
+  let i = 0;
+  const parts = [];
+  for (const stanza of stanzas) {
+    const ptLines = [];
+    for (let j = 0; j < stanza.length; j++) {
+      if (i >= rows.length) break;
+      const row = rows[i++];
+      if (row && typeof row === "object") ptLines.push(String(row.pt ?? ""));
+    }
+    if (ptLines.length) parts.push(ptLines.join("\n"));
+  }
+  while (i < rows.length) {
+    const row = rows[i++];
+    const pt = row && typeof row === "object" ? String(row.pt || "").trim() : "";
+    if (!pt) continue;
+    if (parts.length) parts[parts.length - 1] += "\n" + pt;
+    else parts.push(pt);
+  }
+  return parts.join("\n\n");
+}
+
+function wholePtForLesson(lesson) {
+  const t = lesson?.translation || {};
+  const lyricsEn = lyricsEnForLesson(lesson);
+  const lines = t.line_by_line || [];
+  const built = buildWholePtFromLines(lyricsEn, lines).trim();
+  if (built) return built;
+  return normalizeLyricsNewlines(t.whole_song_pt).trim();
+}
+
+function lyricsEnForLesson(lesson) {
+  const raw = $("lyrics")?.value;
+  if (raw != null && String(raw).trim()) {
+    return normalizeLyricsNewlines(raw).trimEnd();
+  }
+  const lines = Array.isArray(lesson?.translation?.line_by_line) ? lesson.translation.line_by_line : [];
+  return lines
+    .map((row) => (row && typeof row === "object" ? String(row.en || "").trim() : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function renderTranslationLineRows(lesson, lines, { editable = false } = {}) {
+  const lyricsEn = lyricsEnForLesson(lesson);
+  const breaks = stanzaBreakIndices(lyricsEn);
+  let html = "";
+  lines.forEach((row, idx) => {
+    if (!row || typeof row !== "object") return;
+    if (editable) {
+      html += `<tr class="lesson-edit-row">
+        <td><textarea class="input textarea line-en" rows="2" spellcheck="false">${esc(row.en || "")}</textarea></td>
+        <td><textarea class="input textarea line-pt" rows="2" spellcheck="false">${esc(row.pt || "")}</textarea></td>
+      </tr>`;
+    } else {
+      html += `<tr><td>${esc(row.en || "")}</td><td>${esc(row.pt || "")}</td></tr>`;
+    }
+    if (breaks.has(idx)) {
+      html += '<tr class="stanza-gap-row" aria-hidden="true"><td colspan="2"></td></tr>';
+    }
+  });
+  return html;
+}
+
+function renderTranslationFullDuo(lesson, { editable = false } = {}) {
+  const t = lesson.translation || {};
+  const lyricsEn = lyricsEnForLesson(lesson);
+  const wholePt = wholePtForLesson(lesson);
+  let html = '<div class="translation-full-duo">';
+  html += '<div class="translation-full-col">';
+  html += '<p class="translation-full-label">Letra (EN)</p>';
+  if (editable) {
+    html +=
+      '<textarea id="translation-whole-en" class="input textarea translation-full-text translation-full-readonly" rows="12" spellcheck="false" readonly>' +
+      esc(lyricsEn) +
+      "</textarea>";
+  } else {
+    html += `<div class="translation-full-text">${esc(lyricsEn) || '<span class="muted">—</span>'}</div>`;
+  }
+  html += "</div>";
+  html += '<div class="translation-full-col">';
+  html += '<p class="translation-full-label">Tradução (PT)</p>';
+  if (editable) {
+    html +=
+      '<textarea id="translation-whole-pt" class="input textarea translation-full-text translation-full-derived" rows="12" spellcheck="true" readonly title="Gerada automaticamente a partir das linhas abaixo">' +
+      esc(wholePt) +
+      "</textarea>";
+    html += '<p class="translation-derived-hint muted">Tradução completa gerada das linhas PT (não é resumo).</p>';
+  } else {
+    html += `<div class="translation-full-text">${esc(wholePt) || '<span class="muted">—</span>'}</div>`;
+  }
+  html += "</div></div>";
+  return html;
+}
+
 function renderTranslation(lesson) {
   const t = lesson.translation || {};
   const lines = Array.isArray(t.line_by_line) ? t.line_by_line : [];
   let html = '<h2 class="content-heading">Tradução</h2>';
+  html += renderTranslationFullDuo(lesson);
+  html += '<h3 class="section-heading translation-lines-heading">Linha a linha</h3>';
   if (lines.length) {
     html +=
       '<div class="table-wrap prose-table-wrap"><table class="prose-table"><thead><tr><th>EN</th><th>PT</th></tr></thead><tbody>';
-    for (const row of lines) {
-      if (!row || typeof row !== "object") continue;
-      html += `<tr><td>${esc(row.en || "")}</td><td>${esc(row.pt || "")}</td></tr>`;
-    }
+    html += renderTranslationLineRows(lesson, lines);
     html += "</tbody></table></div>";
   } else {
     html += '<p class="muted">Nenhuma linha em translation.line_by_line.</p>';
-  }
-  const whole = (t.whole_song_pt || "").trim();
-  if (whole) {
-    html +=
-      '<div class="section-block"><h3 class="section-heading">Sentido geral</h3><p>' + esc(whole) + "</p></div>";
   }
   return html;
 }
@@ -526,27 +703,19 @@ function splitLinesNonEmpty(s) {
 }
 
 function renderTranslationForm(lesson) {
-  const t = lesson.translation || {};
-  const lines = Array.isArray(t.line_by_line) ? t.line_by_line : [];
+  const lines = Array.isArray(lesson.translation?.line_by_line) ? lesson.translation.line_by_line : [];
   let html = '<h2 class="content-heading">Tradução</h2><div class="lesson-edit-fields">';
+  html += renderTranslationFullDuo(lesson, { editable: true });
+  html += '<h3 class="section-heading translation-lines-heading">Linha a linha</h3>';
   if (lines.length) {
     html +=
       '<div class="table-wrap prose-table-wrap"><table class="prose-table lesson-edit-table"><thead><tr><th>EN</th><th>PT</th></tr></thead><tbody>';
-    lines.forEach((row) => {
-      if (!row || typeof row !== "object") return;
-      html += `<tr class="lesson-edit-row">
-        <td><textarea class="input textarea line-en" rows="2" spellcheck="false">${esc(row.en || "")}</textarea></td>
-        <td><textarea class="input textarea line-pt" rows="2" spellcheck="false">${esc(row.pt || "")}</textarea></td>
-      </tr>`;
-    });
+    html += renderTranslationLineRows(lesson, lines, { editable: true });
     html += "</tbody></table></div>";
   } else {
     html += '<p class="muted">Nenhuma linha em translation.line_by_line.</p>';
   }
-  html +=
-    '<div class="section-block"><h3 class="section-heading">Sentido geral (PT)</h3><label class="field-label" for="translation-whole-pt">Texto completo</label><textarea id="translation-whole-pt" class="input textarea" rows="5" spellcheck="true">' +
-    esc(t.whole_song_pt || "") +
-    "</textarea></div></div>";
+  html += "</div>";
   return html;
 }
 
@@ -558,7 +727,8 @@ function collectTranslation() {
       pt: tr.querySelector(".line-pt")?.value ?? "",
     });
   });
-  const whole = $("translation-whole-pt")?.value?.trim() ?? "";
+  const lyricsEn = lyricsEnForLesson(lastLoadedLessonSnapshot || { translation: { line_by_line: rows } });
+  const whole = buildWholePtFromLines(lyricsEn, rows).trim();
   return { line_by_line: rows, whole_song_pt: whole || null };
 }
 
@@ -1010,6 +1180,88 @@ $("btn-refresh-library").addEventListener("click", () => {
   loadLibrary();
 });
 
+async function downloadBackup() {
+  if (!isAdmin) {
+    openAdminModal();
+    $("library-status").textContent = "Entre como admin para exportar o backup.";
+    return;
+  }
+  const st = $("library-status");
+  st.textContent = "A preparar backup…";
+  try {
+    const res = await fetch("/api/backup", { credentials: "same-origin" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      st.textContent = data.error || `Falha ao exportar (HTTP ${res.status}).`;
+      return;
+    }
+    const blob = await res.blob();
+    let name = "trusicas-backup.sqlite";
+    const dispo = res.headers.get("Content-Disposition") || "";
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(dispo);
+    if (m) name = decodeURIComponent(m[1].trim());
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    st.textContent = "Backup descarregado.";
+  } catch (e) {
+    st.textContent = String(e);
+  }
+}
+
+async function restoreBackupFromFile(file) {
+  if (!isAdmin) {
+    openAdminModal();
+    $("library-status").textContent = "Entre como admin para restaurar um backup.";
+    return;
+  }
+  if (!file) return;
+  if (
+    !confirm(
+      "Restaurar este backup? Todas as lições actuais serão substituídas. O servidor guarda uma cópia automática do ficheiro anterior."
+    )
+  ) {
+    return;
+  }
+  const st = $("library-status");
+  st.textContent = "A restaurar backup…";
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/backup", {
+      method: "POST",
+      body: fd,
+      credentials: "same-origin",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      st.textContent = data.error || "Falha ao restaurar.";
+      return;
+    }
+    clearNewLessonForm({ hideResult: true, focusLyrics: false });
+    libraryTrainingPool = [];
+    await loadLibrary();
+    await refreshTrainingPool();
+    syncTrainPoolHint();
+    st.textContent = `Backup restaurado · ${data.lessons ?? 0} lição(ões).`;
+  } catch (e) {
+    st.textContent = String(e);
+  }
+}
+
+$("btn-download-backup")?.addEventListener("click", () => downloadBackup());
+$("backup-file-input")?.addEventListener("change", (ev) => {
+  const input = ev.target;
+  const file = input.files && input.files[0];
+  if (file) restoreBackupFromFile(file);
+  input.value = "";
+});
+
 $("btn-random-train")?.addEventListener("click", () => spinRandomTraining());
 $("btn-another-random")?.addEventListener("click", () => spinRandomTraining());
 $("btn-exit-training")?.addEventListener("click", () => {
@@ -1091,6 +1343,16 @@ async function saveLessonTextOnly() {
 
 $("btn-save-lesson").addEventListener("click", () => saveLessonTextOnly());
 
+$("btn-new-lesson")?.addEventListener("click", () => {
+  if (!isAdmin) {
+    openAdminModal();
+    $("status").textContent = "Entre como admin para criar lições.";
+    return;
+  }
+  clearNewLessonForm({ hideResult: true, focusLyrics: true });
+  $("status").textContent = "Formulário limpo — pronto para a próxima música.";
+});
+
 $("btn-generate").addEventListener("click", async () => {
   if (!isAdmin) {
     openAdminModal();
@@ -1156,13 +1418,18 @@ $("btn-generate").addEventListener("click", async () => {
         setEditBanner(true, saved.id);
         syncEditToolbar();
         setResultMeta(`Lição atualizada #${saved.id} · ${formatLibraryDate(saved.created_at)}`);
+        status.textContent = "Lição atualizada.";
       } else {
-        clearEditingMode();
-        setResultMeta(`Salvo no SQLite como #${saved.id} · ${formatLibraryDate(saved.created_at)}`);
+        setResultMeta(`Salvo · #${saved.id} · ${formatLibraryDate(saved.created_at)}`);
+        startNextLessonAfterGenerate(saved, {
+          title: payload.title || "",
+          artist: payload.artist || "",
+        });
       }
-      status.textContent = "Pronto.";
     } else {
-      status.textContent = "Pronto (sem retorno de save).";
+      clearNewLessonForm({ hideResult: false });
+      status.textContent = "Pronto. Cole a próxima letra acima.";
+      $("create-form-surface")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   } catch (e) {
     errPanel.classList.remove("hidden");

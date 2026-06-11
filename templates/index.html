@@ -102,6 +102,7 @@
         <div class="toolbar">
           <div class="toolbar-actions">
             <button type="button" id="btn-save-lesson" class="btn btn-secondary hidden">Salvar alterações</button>
+            <button type="button" id="btn-new-lesson" class="btn btn-secondary">Nova lição</button>
             <button type="button" id="btn-generate" class="btn btn-primary">Gerar lição</button>
           </div>
           <div class="generate-status-row">
@@ -177,6 +178,19 @@
               Sortear faixa
             </button>
             <p id="train-pool-hint" class="train-pool-hint muted"></p>
+          </div>
+        </section>
+        <section id="library-backup-panel" class="backup-panel hidden" aria-label="Backup da biblioteca">
+          <div class="backup-panel-copy">
+            <h3 class="backup-panel-title">Backup</h3>
+            <p class="backup-panel-desc">Descarregue ou restaure o ficheiro SQLite com todas as lições. Restaurar substitui a biblioteca local (é guardada uma cópia de segurança automática).</p>
+          </div>
+          <div class="backup-panel-actions">
+            <button type="button" id="btn-download-backup" class="btn btn-secondary">Descarregar backup</button>
+            <label class="btn btn-secondary btn-file-label">
+              Carregar backup
+              <input type="file" id="backup-file-input" class="visually-hidden" accept=".sqlite,.db,application/x-sqlite3" />
+            </label>
           </div>
         </section>
         <div class="datagrid-wrap datagrid-wrap-library">

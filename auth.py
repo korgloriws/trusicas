@@ -7,12 +7,15 @@ from typing import Any, Callable, TypeVar
 
 from flask import jsonify, session
 
+from config import ensure_env_loaded
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 ADMIN_SESSION_KEY = "trusicas_admin"
 
 
 def get_secret_key() -> str:
+    ensure_env_loaded()
     key = (os.getenv("TRUSICAS_SECRET_KEY") or "").strip()
     if key:
         return key
@@ -20,6 +23,7 @@ def get_secret_key() -> str:
 
 
 def get_admin_password() -> str | None:
+    ensure_env_loaded()
     p = (os.getenv("TRUSICAS_ADMIN_PASSWORD") or "").strip()
     return p or None
 

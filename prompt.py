@@ -10,6 +10,12 @@ Hard rules:
   If a curiosity is not certain, set needs_verification to true.
 - Preserve the lyric line order in translation.line_by_line; one object per non-empty lyric line.
 - If the input repeats lines/chorus, still include each repeated line as its own entry (same as the lyrics).
+- translation.line_by_line[].pt: Portuguese rendering of EACH English lyric line (readable as lyrics, not analysis).
+  One object per non-empty lyric line; keep chorus repeats as separate entries.
+- translation.whole_song_pt: the FULL Portuguese LYRICS (not a summary). Join every line_by_line[].pt in order:
+  single \\n between lines within a stanza, double \\n\\n between stanzas (same breaks as the English lyrics).
+- FORBIDDEN in translation.whole_song_pt: paragraphs like "A canção fala de...", thematic essays, or "sentido geral".
+  Put interpretation only in structures.sections or meta.register_notes_pt — never replace the lyric translation.
 """
 
 
@@ -70,7 +76,8 @@ Return JSON with exactly this shape (keys and nesting):
 }
 
 Guidance for quality:
-- structures.sections: explain real grammar/syntax you see (tenses, modals, ellipsis, contractions, questions, etc.).
+- translation: literal/natural lyric translation line by line; preserve imagery and line breaks; do NOT summarize the song.
+- structures.sections: explain grammar/syntax and, if needed, broader meaning (tenses, modals, ellipsis, etc.).
 - vocabulary: prioritize high-value items (phrasal verbs, idioms, informal forms like 'cause), not every word.
 - examples_and_drills: short, natural English; fixation_prompts_pt tells the learner what to practice in PT.
 """.strip()

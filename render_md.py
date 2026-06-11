@@ -19,6 +19,12 @@ def lesson_dict_to_markdown(lesson: dict[str, Any]) -> str:
     lines.append("")
     lines.append("---")
     lines.append("")
+    whole = str(translation.get("whole_song_pt", "")).strip()
+    if whole:
+        lines.append("## Tradução completa (PT)")
+        lines.append("")
+        lines.append(whole)
+        lines.append("")
     lines.append("## Tradução (linha a linha)")
     lines.append("")
     for row in translation.get("line_by_line") or []:
@@ -30,12 +36,6 @@ def lesson_dict_to_markdown(lesson: dict[str, Any]) -> str:
             continue
         lines.append(f"- **EN:** {en}")
         lines.append(f"  **PT:** {pt}")
-        lines.append("")
-    whole = str(translation.get("whole_song_pt", "")).strip()
-    if whole:
-        lines.append("### Sentido geral (PT)")
-        lines.append("")
-        lines.append(whole)
         lines.append("")
     lines.append("---")
     lines.append("")

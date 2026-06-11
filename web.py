@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import io
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request, session
+from flask import Flask, jsonify, render_template, request, send_file, session
 
 from auth import (
     ADMIN_SESSION_KEY,
@@ -15,16 +16,18 @@ from auth import (
     require_admin,
     verify_admin_password,
 )
-from config import load_settings
+from config import ensure_env_loaded, load_settings
 from generate import generate_lesson
 from store import (
     delete_lesson,
+    export_db_bytes,
     get_lesson,
     init_db,
     insert_lesson,
     list_lessons,
     list_lessons_grouped_by_artist,
     patch_lesson_metadata,
+    restore_db_bytes,
     update_lesson,
 )
 
@@ -32,6 +35,7 @@ _ROOT = Path(__file__).resolve().parent
 
 
 def create_app() -> Flask:
+    ensure_env_loaded()
     app = Flask(
         __name__,
         template_folder=str(_ROOT / "templates"),
@@ -236,6 +240,39 @@ def create_app() -> Flask:
         if saved is None:
             return jsonify({"ok": False, "error": "Não foi possível guardar."}), 500
         return jsonify({"ok": True, "saved": saved})
+
+    @app.get("/api/backup")
+    @require_admin
+    def api_backup_download():
+        try:
+            data = export_db_bytes()
+        except FileNotFoundError as e:
+            return jsonify({"ok": False, "error": str(e)}), 404
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        filename = f"trusicas-backup-{stamp}.sqlite"
+        return send_file(
+            io.BytesIO(data),
+            mimetype="application/x-sqlite3",
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    @app.post("/api/backup")
+    @require_admin
+    def api_backup_restore():
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            return jsonify({"ok": False, "error": "Envie um ficheiro .sqlite de backup."}), 400
+        data = upload.read()
+        if not data:
+            return jsonify({"ok": False, "error": "Ficheiro vazio."}), 400
+        try:
+            stats = restore_db_bytes(data)
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        except OSError as e:
+            return jsonify({"ok": False, "error": f"Não foi possível gravar o backup: {e}"}), 500
+        return jsonify({"ok": True, **stats})
 
     return app
 

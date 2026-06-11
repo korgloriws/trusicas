@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+from config import ensure_env_loaded
+
+_SQLITE_MAGIC = b"SQLite format 3\x00"
 
 
 def _project_root() -> Path:
@@ -15,7 +19,7 @@ def _project_root() -> Path:
 
 
 def get_db_path() -> Path:
-    load_dotenv()
+    ensure_env_loaded()
     raw = (os.getenv("TRUSICAS_DB") or os.getenv("LYRICS_LESSON_DB") or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()
@@ -300,3 +304,50 @@ def delete_lesson(lesson_id: int) -> bool:
         cur = conn.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
         conn.commit()
         return cur.rowcount > 0
+
+
+def _sqlite_sidecars(path: Path) -> list[Path]:
+    return [Path(f"{path}-wal"), Path(f"{path}-shm")]
+
+
+def export_db_bytes() -> bytes:
+    """Consolidate WAL and return a portable SQLite file snapshot."""
+    init_db()
+    path = get_db_path()
+    with connect() as conn:
+        conn.execute("PRAGMA wal_checkpoint(FULL)")
+    if not path.is_file():
+        raise FileNotFoundError("Base de dados não encontrada.")
+    return path.read_bytes()
+
+
+def restore_db_bytes(data: bytes) -> dict[str, Any]:
+    if len(data) < 16 or not data.startswith(_SQLITE_MAGIC):
+        raise ValueError("Ficheiro inválido: não é uma base SQLite.")
+
+    path = get_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    if path.is_file():
+        backup_copy = path.with_name(f"{path.stem}.before-restore-{stamp}{path.suffix}")
+        shutil.copy2(path, backup_copy)
+        for sidecar in _sqlite_sidecars(path):
+            if sidecar.is_file():
+                sidecar.unlink()
+
+    path.write_bytes(data)
+    for sidecar in _sqlite_sidecars(path):
+        if sidecar.is_file():
+            sidecar.unlink()
+
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='lessons'"
+        ).fetchone()
+        if row is None:
+            raise ValueError("Backup sem tabela «lessons» — não é um backup Trusicas válido.")
+        count_row = conn.execute("SELECT COUNT(*) AS n FROM lessons").fetchone()
+        lesson_count = int(count_row["n"]) if count_row else 0
+
+    return {"lessons": lesson_count, "path": str(path)}
