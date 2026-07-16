@@ -755,14 +755,14 @@ function setGenerateLoading(on, { updating = false } = {}) {
   generateStartedAt = Date.now();
   generateAvgMs = averageGenDurationMs();
   if (title) {
-    title.textContent = updating ? "A atualizar a lição…" : "A gerar a lição…";
+    title.textContent = updating ? "Atualizando a lição…" : "Gerando a lição…";
   }
   if (avgEl) {
     if (generateAvgMs != null) {
       const n = getGenDurations().length;
       avgEl.textContent = `Tempo médio nas últimas ${n} geraç${n === 1 ? "ão" : "ões"}: ~${formatDurationShort(generateAvgMs)}`;
     } else {
-      avgEl.textContent = "Primeira vez neste dispositivo — costuma levar cerca de 1 minuto.";
+      avgEl.textContent = "Primeira vez neste dispositivo — costuma levar alguns minutos.";
     }
   }
   if (panel) {
