@@ -14,7 +14,7 @@
       }
     })();
   </script>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>{{ app_name }} — inglês com música</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -28,17 +28,6 @@
       <div id="admin-active-bar" class="admin-active-bar hidden" role="status" aria-live="polite">
         Modo admin activo — pode criar, editar e apagar lições
       </div>
-      <div id="admin-auth" class="admin-corner" aria-label="Acesso de edição">
-        <div id="admin-auth-guest">
-          <button type="button" id="btn-open-admin-modal" class="btn btn-secondary btn-sm btn-admin-entry">
-            Admin
-          </button>
-        </div>
-        <div id="admin-auth-user" class="admin-signed hidden">
-          <span class="admin-signed-pill" title="Sessão de administrador activa">Modo admin</span>
-          <button type="button" id="btn-admin-logout" class="btn btn-sm btn-secondary">Sair</button>
-        </div>
-      </div>
       <div class="hero-inner">
         <div class="brand">
           <img
@@ -50,6 +39,18 @@
             decoding="async"
           />
           <p class="brand-tagline">{{ app_tagline }}</p>
+        </div>
+
+        <div id="admin-auth" class="admin-corner" aria-label="Acesso de edição">
+          <div id="admin-auth-guest">
+            <button type="button" id="btn-open-admin-modal" class="btn btn-secondary btn-sm btn-admin-entry">
+              Admin
+            </button>
+          </div>
+          <div id="admin-auth-user" class="admin-signed hidden">
+            <span class="admin-signed-pill" title="Sessão de administrador activa">Modo admin</span>
+            <button type="button" id="btn-admin-logout" class="btn btn-sm btn-secondary">Sair</button>
+          </div>
         </div>
 
         <div class="hero-toolbar">
