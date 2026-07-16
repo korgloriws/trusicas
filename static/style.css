@@ -1,58 +1,80 @@
-/* Trusicas — preto e branco, tipografia 90s */
+/* Trusicas — identidade: Anek Devanagari Expanded Bold + Gordita Regular */
+
+@font-face {
+  font-family: "Gordita";
+  src:
+    url("fonts/Gordita-Regular.woff2") format("woff2"),
+    url("fonts/Gordita-Regular.woff") format("woff"),
+    url("fonts/Gordita-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
   --radius-sm: 12px;
   --radius-md: 18px;
   --radius-lg: 24px;
   --radius-pill: 999px;
-  --font-ui: "Karla", system-ui, sans-serif;
-  --font-display: "Anton", "Arial Narrow", sans-serif;
+  /* Gordita (licença local em static/fonts); Nunito Sans como fallback web */
+  --font-ui: "Gordita", "Nunito Sans", system-ui, sans-serif;
+  --font-display: "Anek Devanagari", sans-serif;
+  --font-brand: var(--font-display);
   --ease: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --brand-black: #050000;
+  --brand-dark: #260602;
+  --brand-wine: #690600;
+  --brand-red: #e42e12;
+  --brand-gray: #c4c4c4;
 }
 
 html[data-theme="dark"],
 html:not([data-theme]) {
   color-scheme: dark;
-  --bg: #000000;
-  --bg-elevated: #111111;
-  --surface: #111111;
-  --border: #333333;
-  --border-strong: #ffffff;
-  --text: #ffffff;
-  --text-dim: #cccccc;
-  --muted: #888888;
-  --inverse: #000000;
-  --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-  --input-bg: #000000;
-  --input-bg-focus: #111111;
-  --tabs-rail-bg: #0a0a0a;
-  --tab-hover-bg: #1a1a1a;
-  --table-row-hover: #1a1a1a;
-  --code-fg: #ffffff;
-  --code-bg: #0a0a0a;
-  --overlay: rgba(0, 0, 0, 0.75);
+  --bg: var(--brand-black);
+  --bg-elevated: var(--brand-dark);
+  --surface: var(--brand-dark);
+  --border: color-mix(in srgb, var(--brand-wine) 70%, #000);
+  --border-strong: var(--brand-wine);
+  --text: var(--brand-gray);
+  --text-dim: color-mix(in srgb, var(--brand-gray) 78%, #000);
+  --muted: color-mix(in srgb, var(--brand-gray) 55%, #000);
+  --inverse: var(--brand-black);
+  --accent: var(--brand-wine);
+  --accent-hot: var(--brand-red);
+  --shadow: 0 8px 32px rgba(5, 0, 0, 0.55);
+  --input-bg: var(--brand-black);
+  --input-bg-focus: var(--brand-dark);
+  --tabs-rail-bg: var(--brand-black);
+  --tab-hover-bg: color-mix(in srgb, var(--brand-dark) 80%, var(--brand-wine));
+  --table-row-hover: color-mix(in srgb, var(--brand-dark) 70%, var(--brand-wine));
+  --code-fg: var(--brand-gray);
+  --code-bg: var(--brand-black);
+  --overlay: rgba(5, 0, 0, 0.78);
 }
 
 html[data-theme="light"] {
   color-scheme: light;
-  --bg: #ffffff;
-  --bg-elevated: #f5f5f5;
-  --surface: #ffffff;
-  --border: #dddddd;
-  --border-strong: #000000;
-  --text: #000000;
-  --text-dim: #333333;
-  --muted: #666666;
-  --inverse: #ffffff;
-  --shadow: 0 10px 36px rgba(0, 0, 0, 0.08);
-  --input-bg: #ffffff;
-  --input-bg-focus: #ffffff;
-  --tabs-rail-bg: #f5f5f5;
-  --tab-hover-bg: #eeeeee;
-  --table-row-hover: #f0f0f0;
-  --code-fg: #000000;
-  --code-bg: #f5f5f5;
-  --overlay: rgba(0, 0, 0, 0.4);
+  --bg: var(--brand-gray);
+  --bg-elevated: color-mix(in srgb, var(--brand-gray) 82%, #fff);
+  --surface: color-mix(in srgb, var(--brand-gray) 70%, #fff);
+  --border: color-mix(in srgb, var(--brand-wine) 35%, var(--brand-gray));
+  --border-strong: var(--brand-wine);
+  --text: var(--brand-wine);
+  --text-dim: color-mix(in srgb, var(--brand-wine) 75%, #000);
+  --muted: color-mix(in srgb, var(--brand-wine) 55%, var(--brand-gray));
+  --inverse: #fff;
+  --accent: var(--brand-red);
+  --accent-hot: var(--brand-red);
+  --shadow: 0 10px 36px rgba(105, 6, 0, 0.12);
+  --input-bg: color-mix(in srgb, var(--brand-gray) 55%, #fff);
+  --input-bg-focus: #fff;
+  --tabs-rail-bg: color-mix(in srgb, var(--brand-gray) 88%, #fff);
+  --tab-hover-bg: color-mix(in srgb, var(--brand-gray) 60%, #fff);
+  --table-row-hover: color-mix(in srgb, var(--brand-gray) 50%, #fff);
+  --code-fg: var(--brand-wine);
+  --code-bg: color-mix(in srgb, var(--brand-gray) 80%, #fff);
+  --overlay: rgba(105, 6, 0, 0.35);
 }
 
 *,
@@ -101,9 +123,9 @@ body.is-admin .hero {
   padding: 0.45rem 1rem;
   font-size: 0.82rem;
   font-weight: 600;
-  color: var(--text);
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border);
+  color: #fff;
+  background: var(--brand-wine);
+  border-bottom: 1px solid color-mix(in srgb, var(--brand-wine) 70%, #000);
 }
 
 .admin-active-bar.hidden {
@@ -252,9 +274,11 @@ body.is-admin .hero-inner {
   margin: 0;
   font-family: var(--font-display);
   font-size: 1.35rem;
-  font-weight: 400;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-weight: 700;
+  font-stretch: 125%;
+  font-variation-settings: "wdth" 125, "wght" 700;
+  letter-spacing: 0.01em;
+  text-transform: none;
 }
 
 .modal-close {
@@ -354,31 +378,27 @@ body.is-admin .read-only-banner {
 
 .brand {
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
+  gap: 0.35rem;
   min-width: 0;
 }
 
-.brand-copy {
-  min-width: 0;
-}
-
-.brand-name {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(2rem, 5vw, 2.75rem);
-  font-weight: 400;
-  letter-spacing: 0.04em;
-  line-height: 1;
-  text-transform: uppercase;
-  color: var(--text);
+.brand-logo {
+  display: block;
+  width: auto;
+  height: clamp(3.5rem, 9vw, 5rem);
+  max-width: min(280px, 70vw);
+  object-fit: contain;
+  object-position: left center;
 }
 
 .brand-tagline {
-  margin: 0.4rem 0 0;
+  margin: 0;
   font-size: 0.92rem;
   color: var(--muted);
   max-width: 28rem;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 /* —— Navegação —— */
@@ -411,9 +431,9 @@ body.is-admin .read-only-banner {
 }
 
 .segmented-btn.active {
-  color: var(--inverse);
-  background: var(--text);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  color: #fff;
+  background: var(--accent-hot);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-hot) 40%, transparent);
 }
 
 /* —— Layout —— */
@@ -443,10 +463,12 @@ body.is-admin .read-only-banner {
 .surface-title {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 400;
+  font-weight: 700;
+  font-stretch: 125%;
+  font-variation-settings: "wdth" 125, "wght" 700;
   font-size: 1.35rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--text);
 }
 
@@ -508,6 +530,11 @@ body.is-admin .read-only-banner {
     width: 100%;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .brand-logo {
+    height: 2.5rem;
+    max-width: 180px;
   }
 
   .segmented {
@@ -633,19 +660,22 @@ body.is-admin .read-only-banner {
 }
 
 .btn-primary {
-  border-color: var(--border-strong);
-  background: var(--text);
-  color: var(--inverse);
+  border-color: var(--accent-hot);
+  background: var(--accent-hot);
+  color: #fff;
   font-family: var(--font-display);
   font-size: 1rem;
-  font-weight: 400;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-weight: 700;
+  font-stretch: 125%;
+  font-variation-settings: "wdth" 125, "wght" 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
   padding: 0.75rem 1.6rem;
 }
 
 .btn-primary:hover:not(:disabled) {
   opacity: 0.92;
+  filter: brightness(1.06);
 }
 
 .btn-secondary {
@@ -778,9 +808,9 @@ body.is-admin .read-only-banner {
 }
 
 .tab-chip.active {
-  color: var(--inverse);
-  border-color: var(--border-strong);
-  background: var(--text);
+  color: #fff;
+  border-color: var(--accent-hot);
+  background: var(--accent-hot);
 }
 
 .tab-chip-muted {
@@ -804,10 +834,12 @@ body.is-admin .read-only-banner {
 .content-heading {
   margin: 0 0 1rem;
   font-family: var(--font-display);
-  font-weight: 400;
+  font-weight: 700;
+  font-stretch: 125%;
+  font-variation-settings: "wdth" 125, "wght" 700;
   font-size: 1.25rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--text);
 }
 
@@ -1385,10 +1417,12 @@ html[data-theme="light"] .train-roulette-overlay.is-final .train-roulette-label 
 .datagrid .library-artist-cell {
   padding: 0.75rem 1rem 0.65rem;
   font-family: var(--font-display);
-  font-weight: 400;
+  font-weight: 700;
+  font-stretch: 125%;
+  font-variation-settings: "wdth" 125, "wght" 700;
   font-size: 1.1rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--text);
   border-bottom: 1px solid var(--border);
   background: var(--tabs-rail-bg);
