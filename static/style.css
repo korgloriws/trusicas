@@ -2138,8 +2138,112 @@ body.auth-pending #app-shell {
   display: none !important;
 }
 
+.lyrics-intake {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  margin-top: 0.15rem;
+}
+
+.lyrics-intake .field-row {
+  margin-top: 0;
+}
+
+.lyrics-mode-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+  max-width: 22rem;
+  margin: 0;
+}
+
+.lyrics-mode-bar .lyrics-mode-btn {
+  min-width: 0;
+  justify-content: center;
+}
+
+.lyrics-search-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, var(--bg));
+}
+
+.lyrics-search-panel.hidden {
+  display: none;
+}
+
+.lyrics-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+}
+
+.lyrics-search-row .btn {
+  min-width: 9.5rem;
+}
+
+.lyrics-search-row .pill-status {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.lyrics-search-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.lyrics-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.lyrics-field-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem 1rem;
+}
+
+.lyrics-field-head .field-label {
+  margin-bottom: 0;
+}
+
+.lyrics-field-hint {
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.lyrics-field .textarea {
+  min-height: 16rem;
+}
+
+body.lyrics-mode-search #title-opt,
+body.lyrics-mode-search #artist-opt {
+  display: none;
+}
+
+body.lyrics-mode-search .lyrics-meta .input {
+  border-color: color-mix(in srgb, var(--border-strong) 55%, var(--border));
+}
+
 @media (max-width: 720px) {
   .modal-panel-wide {
+    width: 100%;
+  }
+
+  .lyrics-mode-bar {
+    max-width: none;
+  }
+
+  .lyrics-search-row .btn {
     width: 100%;
   }
 

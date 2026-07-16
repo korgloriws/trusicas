@@ -16,6 +16,7 @@ from auth import (
     require_admin,
     require_login,
 )
+from fetch_lyrics import fetch_lyrics
 from generate import generate_lesson
 from store import (
     delete_lesson,
@@ -191,6 +192,35 @@ def create_app() -> Flask:
         user = current_user()
         assert user is not None
         return int(user["id"])
+
+    @app.post("/api/lyrics/fetch")
+    @require_login
+    def api_lyrics_fetch():
+        payload = request.get_json(silent=True) or {}
+        title = str(payload.get("title") or "").strip()
+        artist = str(payload.get("artist") or "").strip()
+        result = fetch_lyrics(title, artist)
+        if not result.ok:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": result.error,
+                        "candidates": result.candidates or [],
+                    }
+                ),
+                404,
+            )
+        return jsonify(
+            {
+                "ok": True,
+                "lyrics": result.lyrics,
+                "title": result.title,
+                "artist": result.artist,
+                "source": result.source,
+                "candidates": result.candidates or [],
+            }
+        )
 
     @app.post("/api/generate")
     @require_login

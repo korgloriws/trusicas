@@ -420,6 +420,8 @@ function clearNewLessonForm({ hideResult = true, focusLyrics = true } = {}) {
   if (lyricsEl) lyricsEl.value = "";
   if (titleEl) titleEl.value = "";
   if (artistEl) artistEl.value = "";
+  const fetchSt = $("lyrics-fetch-status");
+  if (fetchSt) fetchSt.textContent = "";
   clearEditingMode();
   clearTrainingMode();
   $("error-panel")?.classList.add("hidden");
@@ -430,6 +432,76 @@ function clearNewLessonForm({ hideResult = true, focusLyrics = true } = {}) {
   }
   if (focusLyrics && lyricsEl && isLoggedIn) {
     setTimeout(() => lyricsEl.focus(), 50);
+  }
+}
+
+let lyricsInputMode = "paste";
+
+function setLyricsInputMode(mode) {
+  lyricsInputMode = mode === "search" ? "search" : "paste";
+  document.body.classList.toggle("lyrics-mode-search", lyricsInputMode === "search");
+  document.querySelectorAll(".lyrics-mode-btn").forEach((btn) => {
+    const on = btn.dataset.lyricsMode === lyricsInputMode;
+    btn.classList.toggle("active", on);
+  });
+  const panel = $("lyrics-search-panel");
+  if (panel) panel.classList.toggle("hidden", lyricsInputMode !== "search");
+  const hint = $("lyrics-field-hint");
+  if (hint) {
+    hint.textContent =
+      lyricsInputMode === "search"
+        ? "Preencha título e artista, depois busque"
+        : "Cole ou digite a letra abaixo";
+  }
+  const lyricsEl = $("lyrics");
+  if (lyricsEl) {
+    lyricsEl.placeholder =
+      lyricsInputMode === "search"
+        ? "A letra aparece aqui após a busca — revise antes de gerar…"
+        : "Paste the English lyrics here…";
+  }
+  const fetchSt = $("lyrics-fetch-status");
+  if (fetchSt && lyricsInputMode === "paste") fetchSt.textContent = "";
+}
+
+async function fetchLyricsFromWeb() {
+  if (!isLoggedIn) {
+    $("lyrics-fetch-status").textContent = "Entre na sua conta para buscar.";
+    return;
+  }
+  const title = ($("title")?.value || "").trim();
+  const artist = ($("artist")?.value || "").trim();
+  const st = $("lyrics-fetch-status");
+  const btn = $("btn-fetch-lyrics");
+  if (!title || !artist) {
+    if (st) st.textContent = "Preencha título e artista.";
+    return;
+  }
+  if (btn) btn.disabled = true;
+  if (st) st.textContent = "A buscar letra…";
+  try {
+    const res = await apiFetch("/api/lyrics/fetch", {
+      method: "POST",
+      body: JSON.stringify({ title, artist }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      if (st) st.textContent = "Sessão expirada — entre novamente.";
+      return;
+    }
+    if (!res.ok || !data.ok) {
+      if (st) st.textContent = data.error || "Não encontrada.";
+      return;
+    }
+    if ($("lyrics")) $("lyrics").value = data.lyrics || "";
+    if (data.title && $("title")) $("title").value = data.title;
+    if (data.artist && $("artist")) $("artist").value = data.artist;
+    if (st) st.textContent = "Letra carregada. Revise e gere a lição.";
+    $("lyrics")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  } catch (e) {
+    if (st) st.textContent = String(e);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1661,10 +1733,15 @@ $("users-create-form")?.addEventListener("submit", (ev) => createUserFromForm(ev
 document.querySelectorAll("[data-close-users-modal]").forEach((el) => {
   el.addEventListener("click", () => closeUsersModal());
 });
+document.querySelectorAll(".lyrics-mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setLyricsInputMode(btn.dataset.lyricsMode || "paste"));
+});
+$("btn-fetch-lyrics")?.addEventListener("click", () => fetchLyricsFromWeb());
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   if ($("users-modal") && !$("users-modal").classList.contains("hidden")) closeUsersModal();
   else if ($("settings-modal") && !$("settings-modal").classList.contains("hidden")) closeSettingsModal();
 });
 
+setLyricsInputMode("paste");
 refreshAuth();

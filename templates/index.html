@@ -112,7 +112,7 @@
       <section class="surface form-surface" id="create-form-surface">
         <div class="surface-head">
           <h2 class="surface-title">Criar lição</h2>
-          <p class="surface-desc">Cole a letra em inglês. Opcional: título e artista ajudam o modelo e a sua biblioteca.</p>
+          <p class="surface-desc">Cole a letra ou busque pelo título e artista. A busca pode trazer erros — revise sempre antes de gerar.</p>
         </div>
         <div id="edit-mode-banner" class="edit-mode-banner hidden" role="status">
           <p id="edit-mode-banner-text" class="edit-mode-banner-text"></p>
@@ -125,16 +125,38 @@
             <button type="button" id="btn-exit-training" class="btn btn-sm btn-secondary">Sair do treino</button>
           </div>
         </div>
-        <label class="field-label" for="lyrics">Letra (inglês)</label>
-        <textarea id="lyrics" class="input textarea" rows="14" spellcheck="false" placeholder="Paste the English lyrics here…"></textarea>
-        <div class="field-row">
-          <div class="field">
-            <label class="field-label" for="title">Título <span class="opt">opcional</span></label>
-            <input id="title" class="input" type="text" autocomplete="off" placeholder="ex.: Something in the Way" />
+
+        <div class="lyrics-intake">
+          <div class="lyrics-mode-bar segmented" role="group" aria-label="Como obter a letra">
+            <button type="button" class="segmented-btn lyrics-mode-btn active" data-lyrics-mode="paste">Colar letra</button>
+            <button type="button" class="segmented-btn lyrics-mode-btn" data-lyrics-mode="search">Buscar letra</button>
           </div>
-          <div class="field">
-            <label class="field-label" for="artist">Artista <span class="opt">opcional</span></label>
-            <input id="artist" class="input" type="text" autocomplete="off" placeholder="ex.: Nirvana" />
+
+          <div class="lyrics-meta field-row">
+            <div class="field">
+              <label class="field-label" for="title">Título <span id="title-opt" class="opt">opcional</span></label>
+              <input id="title" class="input" type="text" autocomplete="off" placeholder="ex.: Something in the Way" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="artist">Artista <span id="artist-opt" class="opt">opcional</span></label>
+              <input id="artist" class="input" type="text" autocomplete="off" placeholder="ex.: Nirvana" />
+            </div>
+          </div>
+
+          <div id="lyrics-search-panel" class="lyrics-search-panel hidden">
+            <div class="lyrics-search-row">
+              <button type="button" id="btn-fetch-lyrics" class="btn btn-primary">Buscar letra</button>
+              <span id="lyrics-fetch-status" class="pill-status" aria-live="polite"></span>
+            </div>
+            <p class="lyrics-search-hint muted">Atenção: a letra pode vir com erros. A busca funciona melhor com músicas bem documentadas — escreva o título e o artista corretamente e revise antes de gerar.</p>
+          </div>
+
+          <div class="field lyrics-field">
+            <div class="lyrics-field-head">
+              <label class="field-label" for="lyrics">Letra (inglês)</label>
+              <span id="lyrics-field-hint" class="lyrics-field-hint muted">Cole ou digite a letra abaixo</span>
+            </div>
+            <textarea id="lyrics" class="input textarea" rows="14" spellcheck="false" placeholder="Paste the English lyrics here…"></textarea>
           </div>
         </div>
         <div class="toolbar">

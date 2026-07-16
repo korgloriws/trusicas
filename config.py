@@ -46,7 +46,10 @@ def load_settings(*, temperature: float | None = None) -> Settings:
         raise RuntimeError(
             "Missing OPENROUTER_API_KEY. Copy .env.example to .env and set your key."
         )
-    model = (os.getenv("OPENROUTER_MODEL") or "openrouter/owl-alpha").strip()
+    model = (
+        os.getenv("OPENROUTER_MODEL")
+        or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+    ).strip()
     http_referer = (os.getenv("OPENROUTER_HTTP_REFERER") or "").strip() or None
     x_title = (os.getenv("OPENROUTER_X_TITLE") or "").strip() or None
     json_mode = _truthy(os.getenv("OPENROUTER_JSON_MODE", "false"))
