@@ -505,18 +505,20 @@ async function fetchLyricsFromWeb() {
   }
 }
 
-function startNextLessonAfterGenerate(saved, { title = "", artist = "" } = {}) {
+function startNextLessonAfterGenerate(saved, { title = "", artist = "", elapsedMs = null } = {}) {
   const titleHint = String(title).trim() || "Sem título";
   const artistHint = String(artist).trim();
   clearNewLessonForm({ hideResult: false, focusLyrics: true });
   const status = $("status");
+  const timeBit =
+    elapsedMs != null && elapsedMs > 0 ? ` · gerada em ${formatDurationShort(elapsedMs)}` : "";
   if (saved && saved.id != null) {
     const label = artistHint ? `${artistHint} — ${titleHint}` : titleHint;
     if (status) {
-      status.textContent = `«${label}» guardada (#${saved.id}). Cole a próxima letra acima.`;
+      status.textContent = `«${label}» guardada (#${saved.id})${timeBit}. Cole a próxima letra acima.`;
     }
   } else if (status) {
-    status.textContent = "Pronto. Cole a próxima letra acima.";
+    status.textContent = `Pronto${timeBit}. Cole a próxima letra acima.`;
   }
   $("create-form-surface")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -655,16 +657,124 @@ function syncEditToolbar() {
   if (b) b.classList.toggle("hidden", editingLessonId == null || !isLoggedIn);
 }
 
-function setGenerateLoading(on) {
-  const spin = $("generate-spinner");
+const GEN_DUR_KEY = "trusicas-gen-durations";
+const GEN_DUR_MAX = 20;
+const GEN_FALLBACK_AVG_MS = 55_000;
+
+let generateStartedAt = 0;
+let generateTickTimer = null;
+let generateAvgMs = null;
+
+function getGenDurations() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(GEN_DUR_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((n) => typeof n === "number" && n >= 5_000 && n <= 600_000);
+  } catch {
+    return [];
+  }
+}
+
+function recordGenDuration(ms) {
+  if (!(ms >= 5_000 && ms <= 600_000)) return;
+  const arr = getGenDurations();
+  arr.push(Math.round(ms));
+  while (arr.length > GEN_DUR_MAX) arr.shift();
+  try {
+    localStorage.setItem(GEN_DUR_KEY, JSON.stringify(arr));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function averageGenDurationMs() {
+  const arr = getGenDurations();
+  if (!arr.length) return null;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function formatDurationShort(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m} min ${r}s` : `${m} min`;
+}
+
+function stopGenerateTicker() {
+  if (generateTickTimer) {
+    clearInterval(generateTickTimer);
+    generateTickTimer = null;
+  }
+}
+
+function updateGenerateLoadingUi() {
+  const elapsed = Date.now() - generateStartedAt;
+  const elapsedEl = $("generate-loading-elapsed");
+  const bar = $("generate-loading-bar");
+  const panel = $("generate-loading");
+  if (elapsedEl) elapsedEl.textContent = `Decorrido: ${formatDurationShort(elapsed)}`;
+
+  const avg = generateAvgMs || GEN_FALLBACK_AVG_MS;
+  const hasHistory = generateAvgMs != null;
+  if (panel) panel.classList.toggle("is-estimating", !hasHistory);
+
+  if (bar && hasHistory) {
+    const pct = Math.min(92, Math.max(6, (elapsed / avg) * 100));
+    bar.style.width = `${pct}%`;
+  }
+}
+
+function setGenerateLoading(on, { updating = false } = {}) {
+  const panel = $("generate-loading");
   const sheet = $("create-form-surface");
   const save = $("btn-save-lesson");
-  if (spin) spin.classList.toggle("hidden", !on);
+  const neu = $("btn-new-lesson");
+  const title = $("generate-loading-title");
+  const avgEl = $("generate-loading-avg");
+  const bar = $("generate-loading-bar");
+
   if (sheet) {
     sheet.classList.toggle("is-generating", on);
     sheet.setAttribute("aria-busy", on ? "true" : "false");
   }
   if (save && !save.classList.contains("hidden")) save.disabled = on;
+  if (neu) neu.disabled = on;
+
+  if (!on) {
+    stopGenerateTicker();
+    if (panel) {
+      panel.classList.add("hidden");
+      panel.classList.remove("is-estimating");
+      panel.setAttribute("aria-hidden", "true");
+    }
+    if (bar) bar.style.width = "8%";
+    return;
+  }
+
+  generateStartedAt = Date.now();
+  generateAvgMs = averageGenDurationMs();
+  if (title) {
+    title.textContent = updating ? "A atualizar a lição…" : "A gerar a lição…";
+  }
+  if (avgEl) {
+    if (generateAvgMs != null) {
+      const n = getGenDurations().length;
+      avgEl.textContent = `Tempo médio nas últimas ${n} geraç${n === 1 ? "ão" : "ões"}: ~${formatDurationShort(generateAvgMs)}`;
+    } else {
+      avgEl.textContent = "Primeira vez neste dispositivo — costuma levar cerca de 1 minuto.";
+    }
+  }
+  if (panel) {
+    panel.classList.remove("hidden");
+    panel.setAttribute("aria-hidden", "false");
+    panel.classList.toggle("is-estimating", generateAvgMs == null);
+  }
+  if (bar) bar.style.width = generateAvgMs != null ? "6%" : "";
+  updateGenerateLoadingUi();
+  stopGenerateTicker();
+  generateTickTimer = setInterval(updateGenerateLoadingUi, 400);
+  panel?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function setView(name) {
@@ -1631,8 +1741,9 @@ $("btn-generate").addEventListener("click", async () => {
   }
 
   btn.disabled = true;
-  setGenerateLoading(true);
-  status.textContent = editingLessonId != null ? "A atualizar a lição… (pode levar um minuto)" : "Gerando… (pode levar um minuto)";
+  const updating = editingLessonId != null;
+  setGenerateLoading(true, { updating });
+  status.textContent = "";
 
   try {
     const payload = {
@@ -1647,6 +1758,7 @@ $("btn-generate").addEventListener("click", async () => {
       body: JSON.stringify(payload),
     });
     const data = await res.json();
+    const elapsedMs = Date.now() - generateStartedAt;
 
     if (!res.ok || !data.ok) {
       errPanel.classList.remove("hidden");
@@ -1660,6 +1772,7 @@ $("btn-generate").addEventListener("click", async () => {
       return;
     }
 
+    recordGenDuration(elapsedMs);
     const lesson = data.lesson;
     displayLesson(lesson);
     const saved = data.saved;
@@ -1670,17 +1783,18 @@ $("btn-generate").addEventListener("click", async () => {
         setEditBanner(true, saved.id);
         syncEditToolbar();
         setResultMeta(`Lição atualizada #${saved.id} · ${formatLibraryDate(saved.created_at)}`);
-        status.textContent = "Lição atualizada.";
+        status.textContent = `Lição atualizada em ${formatDurationShort(elapsedMs)}.`;
       } else {
         setResultMeta(`Salvo · #${saved.id} · ${formatLibraryDate(saved.created_at)}`);
         startNextLessonAfterGenerate(saved, {
           title: payload.title || "",
           artist: payload.artist || "",
+          elapsedMs,
         });
       }
     } else {
       clearNewLessonForm({ hideResult: false });
-      status.textContent = "Pronto. Cole a próxima letra acima.";
+      status.textContent = `Pronto em ${formatDurationShort(elapsedMs)}. Cole a próxima letra acima.`;
       $("create-form-surface")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   } catch (e) {
