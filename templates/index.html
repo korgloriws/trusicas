@@ -22,11 +22,48 @@
   <link rel="icon" href="{{ url_for('static', filename='image/trusicas-logo.png') }}" type="image/png" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
-<body>
+<body class="auth-pending">
+  <div id="login-gate" class="login-gate hidden" hidden>
+    <div class="login-gate-card">
+      <img
+        class="login-gate-logo"
+        src="{{ url_for('static', filename='image/trusicas-logo.png') }}"
+        alt="{{ app_name }}"
+        width="96"
+        height="96"
+        decoding="async"
+      />
+      <h1 class="login-gate-title">Entrar</h1>
+      <p class="login-gate-desc">Aceda à sua biblioteca pessoal de músicas e traduções.</p>
+      <form id="login-form" autocomplete="on">
+        <p id="login-error" class="modal-error hidden" role="alert"></p>
+        <label class="field-label" for="login-username">Utilizador</label>
+        <input
+          type="text"
+          id="login-username"
+          class="input"
+          autocomplete="username"
+          placeholder="o seu utilizador"
+          required
+        />
+        <label class="field-label" for="login-password">Senha</label>
+        <input
+          type="password"
+          id="login-password"
+          class="input"
+          autocomplete="current-password"
+          placeholder="a sua senha"
+          required
+        />
+        <button type="submit" id="btn-login" class="btn btn-primary login-gate-submit">Entrar</button>
+      </form>
+    </div>
+  </div>
+
   <header class="hero" id="site-header">
     <div class="hero-shell">
       <div id="admin-active-bar" class="admin-active-bar hidden" role="status" aria-live="polite">
-        Modo admin activo — pode criar, editar e apagar lições
+        Conta administrador — gestão de utilizadores activa
       </div>
       <div class="hero-inner">
         <div class="brand">
@@ -41,14 +78,11 @@
           <p class="brand-tagline">{{ app_tagline }}</p>
         </div>
 
-        <div id="admin-auth" class="admin-corner" aria-label="Acesso de edição">
-          <div id="admin-auth-guest">
-            <button type="button" id="btn-open-admin-modal" class="btn btn-secondary btn-sm btn-admin-entry">
-              Admin
-            </button>
-          </div>
+        <div id="admin-auth" class="admin-corner" aria-label="Conta">
           <div id="admin-auth-user" class="admin-signed hidden">
-            <span class="admin-signed-pill" title="Sessão de administrador activa">Modo admin</span>
+            <span id="user-display-pill" class="admin-signed-pill" title="Conta activa">—</span>
+            <button type="button" id="btn-open-settings" class="btn btn-sm btn-secondary">Conta</button>
+            <button type="button" id="btn-open-users" class="btn btn-sm btn-secondary hidden">Utilizadores</button>
             <button type="button" id="btn-admin-logout" class="btn btn-sm btn-secondary">Sair</button>
           </div>
         </div>
@@ -73,16 +107,13 @@
 
   <div id="admin-toast" class="admin-toast hidden" role="status" aria-live="polite"></div>
 
-  <main class="shell">
+  <main class="shell" id="app-shell">
     <div id="view-create">
       <section class="surface form-surface" id="create-form-surface">
         <div class="surface-head">
           <h2 class="surface-title">Criar lição</h2>
           <p class="surface-desc">Cole a letra em inglês. Opcional: título e artista ajudam o modelo e a sua biblioteca.</p>
         </div>
-        <p id="read-only-banner" class="read-only-banner" role="status">
-          Modo leitura — qualquer pessoa pode ver lições. Para criar, editar ou apagar, entre com a senha de admin.
-        </p>
         <div id="edit-mode-banner" class="edit-mode-banner hidden" role="status">
           <p id="edit-mode-banner-text" class="edit-mode-banner-text"></p>
           <button type="button" id="btn-cancel-edit" class="btn btn-sm btn-secondary">Cancelar edição</button>
@@ -227,32 +258,82 @@
     </div>
   </div>
 
-  <div id="admin-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title" hidden>
-    <button type="button" class="modal-backdrop" data-close-admin-modal aria-label="Fechar"></button>
+  <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" hidden>
+    <button type="button" class="modal-backdrop" data-close-settings-modal aria-label="Fechar"></button>
     <div class="modal-panel" role="document">
       <header class="modal-head">
-        <h2 id="admin-modal-title" class="modal-title">Administração</h2>
-        <button type="button" class="modal-close" data-close-admin-modal aria-label="Fechar">Fechar</button>
+        <h2 id="settings-modal-title" class="modal-title">A minha conta</h2>
+        <button type="button" class="modal-close" data-close-settings-modal aria-label="Fechar">Fechar</button>
       </header>
-      <form id="admin-login-form" class="modal-body" autocomplete="on">
-        <p class="modal-desc">
-          Entre com a senha para criar, editar e apagar lições. Visitantes continuam só a ver o conteúdo.
-        </p>
-        <p id="admin-modal-notice" class="modal-notice hidden" role="status"></p>
-        <p id="admin-modal-error" class="modal-error hidden" role="alert"></p>
-        <label class="field-label" for="admin-password">Senha</label>
-        <input
-          type="password"
-          id="admin-password"
-          class="input"
-          placeholder="Senha de administrador"
-          autocomplete="current-password"
-        />
+      <form id="settings-form" class="modal-body" autocomplete="off">
+        <p class="modal-desc">Altere o nome de apresentação ou a senha. Para guardar, confirme com a senha actual.</p>
+        <p id="settings-modal-error" class="modal-error hidden" role="alert"></p>
+        <label class="field-label" for="settings-display-name">Nome</label>
+        <input type="text" id="settings-display-name" class="input" autocomplete="nickname" />
+        <label class="field-label" for="settings-password">Nova senha <span class="opt">opcional</span></label>
+        <input type="password" id="settings-password" class="input" autocomplete="new-password" placeholder="deixe em branco para manter" />
+        <label class="field-label" for="settings-current-password">Senha actual</label>
+        <input type="password" id="settings-current-password" class="input" autocomplete="current-password" required />
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-admin-modal>Cancelar</button>
-          <button type="submit" id="btn-admin-login" class="btn btn-primary">Entrar</button>
+          <button type="button" class="btn btn-secondary" data-close-settings-modal>Cancelar</button>
+          <button type="submit" class="btn btn-primary">Guardar</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div id="users-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="users-modal-title" hidden>
+    <button type="button" class="modal-backdrop" data-close-users-modal aria-label="Fechar"></button>
+    <div class="modal-panel modal-panel-wide" role="document">
+      <header class="modal-head">
+        <h2 id="users-modal-title" class="modal-title">Utilizadores</h2>
+        <button type="button" class="modal-close" data-close-users-modal aria-label="Fechar">Fechar</button>
+      </header>
+      <div class="modal-body">
+        <p class="modal-desc">Crie contas com biblioteca isolada. Ao apagar um utilizador, as lições dele também são removidas.</p>
+        <p id="users-modal-error" class="modal-error hidden" role="alert"></p>
+        <form id="users-create-form" class="users-create-form" autocomplete="off">
+          <div class="field-row users-create-row">
+            <div class="field">
+              <label class="field-label" for="new-user-username">Utilizador</label>
+              <input type="text" id="new-user-username" class="input" required placeholder="ex.: maria" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="new-user-display">Nome</label>
+              <input type="text" id="new-user-display" class="input" placeholder="ex.: Maria" />
+            </div>
+          </div>
+          <div class="field-row users-create-row">
+            <div class="field">
+              <label class="field-label" for="new-user-password">Senha</label>
+              <input type="password" id="new-user-password" class="input" required autocomplete="new-password" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="new-user-role">Papel</label>
+              <select id="new-user-role" class="input">
+                <option value="user">Utilizador</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button type="submit" class="btn btn-primary">Criar utilizador</button>
+          </div>
+        </form>
+        <div class="users-list-wrap">
+          <table class="datagrid users-table">
+            <thead>
+              <tr>
+                <th>Utilizador</th>
+                <th>Nome</th>
+                <th>Papel</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="users-tbody"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 

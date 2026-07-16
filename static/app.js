@@ -19,8 +19,10 @@ let trainingModeActive = false;
 /** All tracks for the random trainer ({ id, title, artist, label }). */
 let libraryTrainingPool = [];
 
+let isLoggedIn = false;
 let isAdmin = false;
-let adminConfigured = false;
+/** @type {{ id: number, username: string, display_name: string, role: string } | null} */
+let currentUser = null;
 
 function apiFetch(url, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -34,17 +36,22 @@ async function refreshAuth() {
   try {
     const res = await apiFetch("/api/auth/me");
     const data = await res.json();
-    adminConfigured = Boolean(data.admin_configured);
-    isAdmin = Boolean(data.authenticated);
+    isLoggedIn = Boolean(data.authenticated);
+    isAdmin = Boolean(data.is_admin);
+    currentUser = data.user && typeof data.user === "object" ? data.user : null;
   } catch (_e) {
-    adminConfigured = false;
+    isLoggedIn = false;
     isAdmin = false;
+    currentUser = null;
   }
-  syncAdminUi();
+  syncAuthUi();
+  if (isLoggedIn) {
+    loadLibrary();
+  }
 }
 
-function setAdminModalError(msg) {
-  const el = $("admin-modal-error");
+function setLoginError(msg) {
+  const el = $("login-error");
   if (!el) return;
   if (msg) {
     el.textContent = msg;
@@ -55,49 +62,37 @@ function setAdminModalError(msg) {
   }
 }
 
-function syncAdminModalForm() {
-  const notice = $("admin-modal-notice");
-  const passInput = $("admin-password");
-  const loginBtn = $("btn-admin-login");
-  if (!adminConfigured) {
-    if (notice) {
-      notice.textContent =
-        "Edição desativada no servidor. Defina TRUSICAS_ADMIN_PASSWORD no ficheiro .env e reinicie a aplicação.";
-      notice.classList.remove("hidden");
-    }
-    if (passInput) passInput.disabled = true;
-    if (loginBtn) loginBtn.disabled = true;
+function setModalError(id, msg) {
+  const el = $(id);
+  if (!el) return;
+  if (msg) {
+    el.textContent = msg;
+    el.classList.remove("hidden");
   } else {
-    if (notice) notice.classList.add("hidden");
-    if (passInput) passInput.disabled = false;
-    if (loginBtn) loginBtn.disabled = false;
+    el.textContent = "";
+    el.classList.add("hidden");
   }
 }
 
-function openAdminModal() {
-  const modal = $("admin-modal");
+function openModal(id) {
+  const modal = $(id);
   if (!modal) return;
-  setAdminModalError("");
-  syncAdminModalForm();
   modal.classList.remove("hidden");
   modal.hidden = false;
   document.body.classList.add("modal-open");
-  const pass = $("admin-password");
-  if (pass && !pass.disabled) {
-    pass.value = "";
-    setTimeout(() => pass.focus(), 50);
-  } else {
-    $("btn-open-admin-modal")?.focus();
-  }
 }
 
-function closeAdminModal() {
-  const modal = $("admin-modal");
+function closeModal(id) {
+  const modal = $(id);
   if (!modal) return;
   modal.classList.add("hidden");
   modal.hidden = true;
-  document.body.classList.remove("modal-open");
-  setAdminModalError("");
+  if (
+    (!$("settings-modal") || $("settings-modal").classList.contains("hidden")) &&
+    (!$("users-modal") || $("users-modal").classList.contains("hidden"))
+  ) {
+    document.body.classList.remove("modal-open");
+  }
 }
 
 let adminToastTimer = null;
@@ -114,19 +109,45 @@ function showAdminToast(message) {
   }, 4500);
 }
 
-function syncAdminUi() {
+function syncAuthUi() {
+  document.body.classList.remove("auth-pending");
   document.body.classList.toggle("is-admin", isAdmin);
+  document.body.classList.toggle("is-logged-in", isLoggedIn);
 
-  const guest = $("admin-auth-guest");
-  const user = $("admin-auth-user");
-  const bar = $("admin-active-bar");
+  const gate = $("login-gate");
+  const shell = $("app-shell");
   const header = $("site-header");
-  if (guest) guest.classList.toggle("hidden", isAdmin);
-  if (user) user.classList.toggle("hidden", !isAdmin);
-  if (bar) bar.classList.toggle("hidden", !isAdmin);
-  if (header) header.setAttribute("aria-label", isAdmin ? "Cabeçalho — modo admin activo" : "Cabeçalho");
+  if (gate) {
+    gate.hidden = isLoggedIn;
+    gate.classList.toggle("hidden", isLoggedIn);
+  }
+  if (shell) {
+    shell.hidden = !isLoggedIn;
+    shell.classList.toggle("hidden", !isLoggedIn);
+  }
+  if (header) {
+    header.hidden = !isLoggedIn;
+    header.classList.toggle("hidden", !isLoggedIn);
+  }
 
-  const ro = !isAdmin;
+  const userWrap = $("admin-auth-user");
+  const bar = $("admin-active-bar");
+  const pill = $("user-display-pill");
+  const usersBtn = $("btn-open-users");
+  if (userWrap) userWrap.classList.toggle("hidden", !isLoggedIn);
+  if (bar) bar.classList.toggle("hidden", !isAdmin);
+  if (pill) {
+    if (currentUser) {
+      pill.textContent = currentUser.display_name || currentUser.username;
+      pill.title = "@" + currentUser.username;
+    } else {
+      pill.textContent = "Conta";
+      pill.title = "";
+    }
+  }
+  if (usersBtn) usersBtn.classList.toggle("hidden", !isAdmin);
+
+  const ro = !isLoggedIn;
   for (const id of ["lyrics", "title", "artist"]) {
     const el = $(id);
     if (el) el.readOnly = ro;
@@ -134,77 +155,241 @@ function syncAdminUi() {
 
   const gen = $("btn-generate");
   const newLesson = $("btn-new-lesson");
-  if (gen) gen.disabled = !isAdmin;
-  if (newLesson) newLesson.disabled = !isAdmin;
+  if (gen) gen.disabled = !isLoggedIn;
+  if (newLesson) newLesson.disabled = !isLoggedIn;
 
   const backupPanel = $("library-backup-panel");
   if (backupPanel) backupPanel.classList.toggle("hidden", !isAdmin);
 
-  if (!isAdmin && editingLessonId != null) {
-    const snap = lastLoadedLessonSnapshot;
+  if (!isLoggedIn && editingLessonId != null) {
     clearEditingMode();
-    if (snap && $("result") && !$("result").classList.contains("hidden")) {
-      displayLesson(snap);
-    }
+    lastLoadedLessonSnapshot = null;
+    $("result")?.classList.add("hidden");
   }
   syncEditToolbar();
 }
 
-async function adminLogin(ev) {
+async function doLogin(ev) {
   if (ev) ev.preventDefault();
-  if (!adminConfigured) {
-    setAdminModalError("Edição não está configurada no servidor.");
+  const username = ($("login-username")?.value || "").trim();
+  const password = $("login-password")?.value || "";
+  if (!username || !password) {
+    setLoginError("Preencha utilizador e senha.");
     return;
   }
-  const input = $("admin-password");
-  const password = (input?.value || "").trim();
-  if (!password) {
-    setAdminModalError("Digite a senha.");
-    return;
-  }
-  const loginBtn = $("btn-admin-login");
-  if (loginBtn) loginBtn.disabled = true;
-  setAdminModalError("");
+  const btn = $("btn-login");
+  if (btn) btn.disabled = true;
+  setLoginError("");
   try {
     const res = await apiFetch("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      setAdminModalError(data.error || "Falha ao entrar.");
+      setLoginError(data.error || "Falha ao entrar.");
       return;
     }
-    isAdmin = true;
-    if (input) input.value = "";
-    closeAdminModal();
-    syncAdminUi();
-    showAdminToast("Entrou em modo admin — edição activada.");
-    $("status").textContent = "Modo admin activo.";
-    if ($("view-library") && !$("view-library").classList.contains("hidden")) {
-      loadLibrary();
-    }
+    isLoggedIn = true;
+    isAdmin = Boolean(data.is_admin);
+    currentUser = data.user || null;
+    if ($("login-password")) $("login-password").value = "";
+    syncAuthUi();
+    showAdminToast("Bem-vindo" + (currentUser?.display_name ? `, ${currentUser.display_name}` : "") + ".");
+    loadLibrary();
   } catch (e) {
-    setAdminModalError(String(e));
+    setLoginError(String(e));
   } finally {
-    if (loginBtn) loginBtn.disabled = !adminConfigured;
+    if (btn) btn.disabled = false;
   }
 }
 
-async function adminLogout() {
+async function doLogout() {
   try {
     await apiFetch("/api/auth/logout", { method: "POST" });
   } catch (_e) {
     /* ignore */
   }
+  isLoggedIn = false;
   isAdmin = false;
-  syncAdminUi();
+  currentUser = null;
+  clearEditingMode();
+  clearTrainingMode();
+  libraryTrainingPool = [];
+  lastLoadedLessonSnapshot = null;
+  $("result")?.classList.add("hidden");
+  syncAuthUi();
   const toast = $("admin-toast");
   if (toast) toast.classList.add("hidden");
   if (adminToastTimer) clearTimeout(adminToastTimer);
-  $("status").textContent = "Saiu do modo admin.";
-  if ($("view-library") && !$("view-library").classList.contains("hidden")) {
-    loadLibrary();
+  setTimeout(() => $("login-username")?.focus(), 50);
+}
+
+function openSettingsModal() {
+  if (!isLoggedIn || !currentUser) return;
+  setModalError("settings-modal-error", "");
+  if ($("settings-display-name")) $("settings-display-name").value = currentUser.display_name || "";
+  if ($("settings-password")) $("settings-password").value = "";
+  if ($("settings-current-password")) $("settings-current-password").value = "";
+  openModal("settings-modal");
+  setTimeout(() => $("settings-display-name")?.focus(), 50);
+}
+
+function closeSettingsModal() {
+  closeModal("settings-modal");
+  setModalError("settings-modal-error", "");
+}
+
+async function saveSettings(ev) {
+  if (ev) ev.preventDefault();
+  const display_name = ($("settings-display-name")?.value || "").trim();
+  const password = $("settings-password")?.value || "";
+  const current_password = $("settings-current-password")?.value || "";
+  if (!current_password) {
+    setModalError("settings-modal-error", "Indique a senha actual.");
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify({
+        display_name,
+        password: password || null,
+        current_password,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setModalError("settings-modal-error", data.error || "Falha ao guardar.");
+      return;
+    }
+    currentUser = data.user;
+    isAdmin = Boolean(data.is_admin);
+    syncAuthUi();
+    closeSettingsModal();
+    showAdminToast("Conta actualizada.");
+  } catch (e) {
+    setModalError("settings-modal-error", String(e));
+  }
+}
+
+async function openUsersModal() {
+  if (!isAdmin) return;
+  setModalError("users-modal-error", "");
+  openModal("users-modal");
+  await loadUsersList();
+}
+
+function closeUsersModal() {
+  closeModal("users-modal");
+  setModalError("users-modal-error", "");
+}
+
+async function loadUsersList() {
+  const tbody = $("users-tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "<tr><td colspan=\"4\" class=\"muted\">A carregar…</td></tr>";
+  try {
+    const res = await apiFetch("/api/users");
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      tbody.innerHTML =
+        "<tr><td colspan=\"4\" class=\"muted\">" + esc(data.error || "Falha.") + "</td></tr>";
+      return;
+    }
+    const users = data.users || [];
+    if (!users.length) {
+      tbody.innerHTML = "<tr><td colspan=\"4\" class=\"muted\">Sem utilizadores.</td></tr>";
+      return;
+    }
+    tbody.innerHTML = "";
+    for (const u of users) {
+      const tr = document.createElement("tr");
+      tr.className = "users-row";
+      const isSelf = currentUser && Number(u.id) === Number(currentUser.id);
+      tr.innerHTML = `
+        <td><code>@${esc(u.username)}</code></td>
+        <td>${esc(u.display_name || "")}</td>
+        <td>${u.role === "admin" ? "Admin" : "Utilizador"}</td>
+        <td class="cell-actions library-cell-actions">
+          <button type="button" class="btn btn-sm btn-secondary btn-user-reset" data-id="${esc(String(u.id))}">Senha</button>
+          <button type="button" class="btn btn-sm btn-ghost-danger btn-user-del" data-id="${esc(String(u.id))}" ${isSelf ? "disabled" : ""}>Apagar</button>
+        </td>`;
+      tr.querySelector(".btn-user-reset")?.addEventListener("click", () => resetUserPassword(u));
+      tr.querySelector(".btn-user-del")?.addEventListener("click", () => removeUser(u));
+      tbody.appendChild(tr);
+    }
+  } catch (e) {
+    tbody.innerHTML = "<tr><td colspan=\"4\" class=\"muted\">" + esc(String(e)) + "</td></tr>";
+  }
+}
+
+async function createUserFromForm(ev) {
+  if (ev) ev.preventDefault();
+  setModalError("users-modal-error", "");
+  const username = ($("new-user-username")?.value || "").trim();
+  const display_name = ($("new-user-display")?.value || "").trim();
+  const password = $("new-user-password")?.value || "";
+  const role = $("new-user-role")?.value || "user";
+  try {
+    const res = await apiFetch("/api/users", {
+      method: "POST",
+      body: JSON.stringify({ username, display_name, password, role }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setModalError("users-modal-error", data.error || "Falha ao criar.");
+      return;
+    }
+    if ($("new-user-username")) $("new-user-username").value = "";
+    if ($("new-user-display")) $("new-user-display").value = "";
+    if ($("new-user-password")) $("new-user-password").value = "";
+    if ($("new-user-role")) $("new-user-role").value = "user";
+    showAdminToast("Utilizador criado: @" + (data.user?.username || username));
+    await loadUsersList();
+  } catch (e) {
+    setModalError("users-modal-error", String(e));
+  }
+}
+
+async function resetUserPassword(u) {
+  const pwd = window.prompt(`Nova senha para @${u.username}:`);
+  if (pwd == null) return;
+  if (!pwd.trim()) {
+    setModalError("users-modal-error", "Senha vazia.");
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/users/" + encodeURIComponent(String(u.id)), {
+      method: "PATCH",
+      body: JSON.stringify({ password: pwd }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setModalError("users-modal-error", data.error || "Falha ao alterar senha.");
+      return;
+    }
+    showAdminToast("Senha actualizada para @" + u.username);
+  } catch (e) {
+    setModalError("users-modal-error", String(e));
+  }
+}
+
+async function removeUser(u) {
+  if (!confirm(`Apagar @${u.username} e todas as lições desta conta?`)) return;
+  try {
+    const res = await apiFetch("/api/users/" + encodeURIComponent(String(u.id)), {
+      method: "DELETE",
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setModalError("users-modal-error", data.error || "Falha ao apagar.");
+      return;
+    }
+    showAdminToast("Utilizador apagado.");
+    await loadUsersList();
+  } catch (e) {
+    setModalError("users-modal-error", String(e));
   }
 }
 
@@ -243,7 +428,7 @@ function clearNewLessonForm({ hideResult = true, focusLyrics = true } = {}) {
     setResultMeta("");
     lastLoadedLessonSnapshot = null;
   }
-  if (focusLyrics && lyricsEl && isAdmin) {
+  if (focusLyrics && lyricsEl && isLoggedIn) {
     setTimeout(() => lyricsEl.focus(), 50);
   }
 }
@@ -395,7 +580,7 @@ async function spinRandomTraining() {
 
 function syncEditToolbar() {
   const b = $("btn-save-lesson");
-  if (b) b.classList.toggle("hidden", editingLessonId == null || !isAdmin);
+  if (b) b.classList.toggle("hidden", editingLessonId == null || !isLoggedIn);
 }
 
 function setGenerateLoading(on) {
@@ -937,7 +1122,7 @@ function displayLesson(lesson) {
   } catch (_e) {
     lastLoadedLessonSnapshot = lesson && typeof lesson === "object" ? { ...lesson } : null;
   }
-  const editable = editingLessonId != null && isAdmin;
+  const editable = editingLessonId != null && isLoggedIn;
   if (editable) {
     $("panel-translation").innerHTML = renderTranslationForm(lesson);
     $("panel-structures").innerHTML = renderStructuresForm(lesson);
@@ -1018,10 +1203,10 @@ async function loadLibrary() {
       tr.dataset.id = String(r.id);
       const title = r.title_hint && String(r.title_hint).trim() ? r.title_hint : "Sem título";
       const meta = formatLibraryDate(r.created_at);
-      const adminActions = isAdmin
+      const adminActions = isLoggedIn
         ? `<button type="button" class="btn btn-sm btn-secondary btn-edit" data-id="${esc(String(r.id))}">Editar</button>
           <button type="button" class="btn btn-sm btn-ghost-danger btn-del" data-id="${esc(String(r.id))}">Excluir</button>`
-        : `<span class="muted library-readonly-hint">Só leitura</span>`;
+        : "";
       tr.innerHTML = `
         <td class="library-music-cell">
           <div class="library-music-title">${esc(title)}</div>
@@ -1118,9 +1303,8 @@ async function openLesson(id, opts = {}) {
 }
 
 async function editLesson(id) {
-  if (!isAdmin) {
-    openAdminModal();
-    $("status").textContent = "Entre como admin para editar.";
+  if (!isLoggedIn) {
+    $("status").textContent = "Entre na sua conta para editar.";
     return;
   }
   const st = $("status");
@@ -1150,8 +1334,8 @@ async function editLesson(id) {
 }
 
 async function deleteLesson(id) {
-  if (!isAdmin) {
-    $("library-status").textContent = "Entre como admin para excluir.";
+  if (!isLoggedIn) {
+    $("library-status").textContent = "Entre na sua conta para excluir.";
     return;
   }
   if (!confirm("Excluir esta lição do banco local?")) return;
@@ -1182,8 +1366,7 @@ $("btn-refresh-library").addEventListener("click", () => {
 
 async function downloadBackup() {
   if (!isAdmin) {
-    openAdminModal();
-    $("library-status").textContent = "Entre como admin para exportar o backup.";
+    $("library-status").textContent = "Apenas o administrador pode exportar o backup.";
     return;
   }
   const st = $("library-status");
@@ -1216,8 +1399,7 @@ async function downloadBackup() {
 
 async function restoreBackupFromFile(file) {
   if (!isAdmin) {
-    openAdminModal();
-    $("library-status").textContent = "Entre como admin para restaurar um backup.";
+    $("library-status").textContent = "Apenas o administrador pode restaurar o backup.";
     return;
   }
   if (!file) return;
@@ -1292,7 +1474,7 @@ $("btn-cancel-edit").addEventListener("click", () => {
 });
 
 async function saveLessonTextOnly() {
-  if (!isAdmin || editingLessonId == null) return;
+  if (!isLoggedIn || editingLessonId == null) return;
   const lyrics = $("lyrics").value.trim();
   const status = $("status");
   if (!lyrics) {
@@ -1344,9 +1526,8 @@ async function saveLessonTextOnly() {
 $("btn-save-lesson").addEventListener("click", () => saveLessonTextOnly());
 
 $("btn-new-lesson")?.addEventListener("click", () => {
-  if (!isAdmin) {
-    openAdminModal();
-    $("status").textContent = "Entre como admin para criar lições.";
+  if (!isLoggedIn) {
+    $("status").textContent = "Entre na sua conta para criar lições.";
     return;
   }
   clearNewLessonForm({ hideResult: true, focusLyrics: true });
@@ -1354,9 +1535,8 @@ $("btn-new-lesson")?.addEventListener("click", () => {
 });
 
 $("btn-generate").addEventListener("click", async () => {
-  if (!isAdmin) {
-    openAdminModal();
-    $("status").textContent = "Entre como admin para gerar ou alterar lições.";
+  if (!isLoggedIn) {
+    $("status").textContent = "Entre na sua conta para gerar ou alterar lições.";
     return;
   }
   const lyrics = $("lyrics").value.trim();
@@ -1469,17 +1649,22 @@ document.querySelectorAll(".theme-choice").forEach((btn) => {
 
 syncThemeUi();
 
-$("btn-open-admin-modal")?.addEventListener("click", () => openAdminModal());
-$("admin-login-form")?.addEventListener("submit", (ev) => adminLogin(ev));
-document.querySelectorAll("[data-close-admin-modal]").forEach((el) => {
-  el.addEventListener("click", () => closeAdminModal());
+$("login-form")?.addEventListener("submit", (ev) => doLogin(ev));
+$("btn-admin-logout")?.addEventListener("click", () => doLogout());
+$("btn-open-settings")?.addEventListener("click", () => openSettingsModal());
+$("settings-form")?.addEventListener("submit", (ev) => saveSettings(ev));
+document.querySelectorAll("[data-close-settings-modal]").forEach((el) => {
+  el.addEventListener("click", () => closeSettingsModal());
+});
+$("btn-open-users")?.addEventListener("click", () => openUsersModal());
+$("users-create-form")?.addEventListener("submit", (ev) => createUserFromForm(ev));
+document.querySelectorAll("[data-close-users-modal]").forEach((el) => {
+  el.addEventListener("click", () => closeUsersModal());
 });
 document.addEventListener("keydown", (ev) => {
-  const modal = $("admin-modal");
-  if (ev.key === "Escape" && modal && !modal.classList.contains("hidden")) {
-    closeAdminModal();
-  }
+  if (ev.key !== "Escape") return;
+  if ($("users-modal") && !$("users-modal").classList.contains("hidden")) closeUsersModal();
+  else if ($("settings-modal") && !$("settings-modal").classList.contains("hidden")) closeSettingsModal();
 });
-$("btn-admin-logout")?.addEventListener("click", () => adminLogout());
 
 refreshAuth();

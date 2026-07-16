@@ -58,6 +58,22 @@ def init_db() -> None:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS users (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              username TEXT NOT NULL UNIQUE,
+              display_name TEXT NOT NULL,
+              password_hash TEXT NOT NULL,
+              role TEXT NOT NULL DEFAULT 'user'
+                CHECK (role IN ('admin', 'user'))
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS lessons (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -66,18 +82,35 @@ def init_db() -> None:
               lyrics_en TEXT NOT NULL,
               model TEXT,
               lesson_json TEXT NOT NULL,
-              raw_response TEXT
+              raw_response TEXT,
+              user_id INTEGER
             )
             """
         )
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(lessons)").fetchall()}
+        if "user_id" not in cols:
+            conn.execute("ALTER TABLE lessons ADD COLUMN user_id INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lessons_created_at ON lessons(created_at DESC)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lessons_user_id ON lessons(user_id)"
+        )
+        # Migração: lições órfãs passam para o primeiro admin (se existir)
+        admin = conn.execute(
+            "SELECT id FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1"
+        ).fetchone()
+        if admin is not None:
+            conn.execute(
+                "UPDATE lessons SET user_id = ? WHERE user_id IS NULL",
+                (int(admin["id"]),),
+            )
         conn.commit()
 
 
 def insert_lesson(
     *,
+    user_id: int,
     lyrics_en: str,
     title_hint: str | None,
     artist_hint: str | None,
@@ -90,8 +123,10 @@ def insert_lesson(
     with connect() as conn:
         cur = conn.execute(
             """
-            INSERT INTO lessons (title_hint, artist_hint, lyrics_en, model, lesson_json, raw_response)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO lessons (
+              title_hint, artist_hint, lyrics_en, model, lesson_json, raw_response, user_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 title_hint,
@@ -100,6 +135,7 @@ def insert_lesson(
                 model,
                 payload,
                 raw_response,
+                user_id,
             ),
         )
         kid = int(cur.lastrowid)
@@ -111,6 +147,7 @@ def insert_lesson(
 def update_lesson(
     lesson_id: int,
     *,
+    user_id: int,
     lyrics_en: str,
     title_hint: str | None,
     artist_hint: str | None,
@@ -118,7 +155,7 @@ def update_lesson(
     lesson: dict[str, Any],
     raw_response: str,
 ) -> dict[str, Any] | None:
-    """Overwrite an existing row. Returns {id, created_at} or None if id missing."""
+    """Overwrite an existing row owned by user_id. Returns {id, created_at} or None."""
     init_db()
     payload = json.dumps(lesson, ensure_ascii=False)
     with connect() as conn:
@@ -127,13 +164,25 @@ def update_lesson(
             UPDATE lessons
             SET title_hint = ?, artist_hint = ?, lyrics_en = ?, model = ?,
                 lesson_json = ?, raw_response = ?
-            WHERE id = ?
+            WHERE id = ? AND user_id = ?
             """,
-            (title_hint, artist_hint, lyrics_en, model, payload, raw_response, lesson_id),
+            (
+                title_hint,
+                artist_hint,
+                lyrics_en,
+                model,
+                payload,
+                raw_response,
+                lesson_id,
+                user_id,
+            ),
         )
         if cur.rowcount == 0:
             return None
-        row = conn.execute("SELECT created_at FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
+        row = conn.execute(
+            "SELECT created_at FROM lessons WHERE id = ? AND user_id = ?",
+            (lesson_id, user_id),
+        ).fetchone()
         conn.commit()
     return {"id": lesson_id, "created_at": str(row["created_at"]) if row else ""}
 
@@ -141,6 +190,7 @@ def update_lesson(
 def patch_lesson_metadata(
     lesson_id: int,
     *,
+    user_id: int,
     lyrics_en: str,
     title_hint: str | None,
     artist_hint: str | None,
@@ -156,22 +206,25 @@ def patch_lesson_metadata(
                 UPDATE lessons
                 SET lyrics_en = ?, title_hint = ?, artist_hint = ?,
                     lesson_json = ?
-                WHERE id = ?
+                WHERE id = ? AND user_id = ?
                 """,
-                (lyrics_en, title_hint, artist_hint, payload, lesson_id),
+                (lyrics_en, title_hint, artist_hint, payload, lesson_id, user_id),
             )
         else:
             cur = conn.execute(
                 """
                 UPDATE lessons
                 SET lyrics_en = ?, title_hint = ?, artist_hint = ?
-                WHERE id = ?
+                WHERE id = ? AND user_id = ?
                 """,
-                (lyrics_en, title_hint, artist_hint, lesson_id),
+                (lyrics_en, title_hint, artist_hint, lesson_id, user_id),
             )
         if cur.rowcount == 0:
             return None
-        row = conn.execute("SELECT created_at FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
+        row = conn.execute(
+            "SELECT created_at FROM lessons WHERE id = ? AND user_id = ?",
+            (lesson_id, user_id),
+        ).fetchone()
         conn.commit()
     return {"id": lesson_id, "created_at": str(row["created_at"]) if row else ""}
 
@@ -186,7 +239,9 @@ class LessonSummary:
     lyrics_preview: str
 
 
-def list_lessons(*, limit: int = 100, offset: int = 0) -> list[LessonSummary]:
+def list_lessons(
+    *, user_id: int, limit: int = 100, offset: int = 0
+) -> list[LessonSummary]:
     init_db()
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
@@ -196,10 +251,11 @@ def list_lessons(*, limit: int = 100, offset: int = 0) -> list[LessonSummary]:
             SELECT id, created_at, title_hint, artist_hint, model,
                    substr(lyrics_en, 1, 160) AS lyrics_preview
             FROM lessons
+            WHERE user_id = ?
             ORDER BY datetime(created_at) DESC, id DESC
             LIMIT ? OFFSET ?
             """,
-            (limit, offset),
+            (user_id, limit, offset),
         ).fetchall()
     return _rows_to_summaries(rows)
 
@@ -227,7 +283,10 @@ def _library_search_terms(search: str | None) -> list[str]:
 
 
 def list_lessons_grouped_by_artist(
-    *, limit: int = 500, search: str | None = None
+    *,
+    user_id: int,
+    limit: int = 500,
+    search: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """
     Lessons ordered alphabetically by artist (case-insensitive), then by date desc within each artist.
@@ -238,12 +297,11 @@ def list_lessons_grouped_by_artist(
     init_db()
     limit = max(1, min(limit, 2000))
     terms = _library_search_terms(search)
-    where_sql = ""
-    args: list[Any] = []
+    where_parts = ["user_id = ?"]
+    args: list[Any] = [user_id]
     if terms:
-        parts = []
         for term in terms:
-            parts.append(
+            where_parts.append(
                 "("
                 "INSTR(LOWER(COALESCE(title_hint, '')), ?) > 0 OR "
                 "INSTR(LOWER(COALESCE(artist_hint, '')), ?) > 0 OR "
@@ -251,7 +309,7 @@ def list_lessons_grouped_by_artist(
                 ")"
             )
             args.extend([term, term, term])
-        where_sql = "WHERE " + " AND ".join(parts)
+    where_sql = "WHERE " + " AND ".join(where_parts)
     args.append(limit)
     with connect() as conn:
         rows = conn.execute(
@@ -287,15 +345,15 @@ def list_lessons_grouped_by_artist(
     return groups, len(summaries)
 
 
-def get_lesson(lesson_id: int) -> dict[str, Any] | None:
+def get_lesson(lesson_id: int, *, user_id: int) -> dict[str, Any] | None:
     init_db()
     with connect() as conn:
         row = conn.execute(
             """
             SELECT id, created_at, title_hint, artist_hint, lyrics_en, model, lesson_json, raw_response
-            FROM lessons WHERE id = ?
+            FROM lessons WHERE id = ? AND user_id = ?
             """,
-            (lesson_id,),
+            (lesson_id, user_id),
         ).fetchone()
     if row is None:
         return None
@@ -315,10 +373,13 @@ def get_lesson(lesson_id: int) -> dict[str, Any] | None:
     }
 
 
-def delete_lesson(lesson_id: int) -> bool:
+def delete_lesson(lesson_id: int, *, user_id: int) -> bool:
     init_db()
     with connect() as conn:
-        cur = conn.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
+        cur = conn.execute(
+            "DELETE FROM lessons WHERE id = ? AND user_id = ?",
+            (lesson_id, user_id),
+        )
         conn.commit()
         return cur.rowcount > 0
 
@@ -390,6 +451,19 @@ def restore_db_bytes(data: bytes) -> dict[str, Any]:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS users (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  username TEXT NOT NULL UNIQUE,
+                  display_name TEXT NOT NULL,
+                  password_hash TEXT NOT NULL,
+                  role TEXT NOT NULL DEFAULT 'user'
+                    CHECK (role IN ('admin', 'user'))
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS lessons (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
                   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -398,10 +472,14 @@ def restore_db_bytes(data: bytes) -> dict[str, Any]:
                   lyrics_en TEXT NOT NULL,
                   model TEXT,
                   lesson_json TEXT NOT NULL,
-                  raw_response TEXT
+                  raw_response TEXT,
+                  user_id INTEGER
                 )
                 """
             )
+            cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(lessons)").fetchall()}
+            if "user_id" not in cols:
+                conn.execute("ALTER TABLE lessons ADD COLUMN user_id INTEGER")
             row = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='lessons'"
             ).fetchone()
