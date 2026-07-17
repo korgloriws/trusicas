@@ -35,7 +35,7 @@ python -m pip install -r requirements.txt
 python __main__.py --input sample-lyrics.txt --out-dir output --basename teste01
 ```
 
-Ajuste o pool de modelos no `.env` (OpenRouter escolhe o mais disponível/rápido):
+Ajuste o pool de modelos no `.env` (OpenRouter aceita no máximo **3** por pedido; se listar mais, escolhemos os melhores no momento):
 
 ```
 OPENROUTER_MODELS=nvidia/nemotron-3-super-120b-a12b:free,qwen/qwen3-coder:free,openai/gpt-oss-20b:free,tencent/hy3:free,nvidia/nemotron-3-ultra-550b-a55b:free

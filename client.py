@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import httpx
 
-from config import Settings
+from config import OPENROUTER_MODELS_REQUEST_CAP, Settings
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+
+# Cache curto do ranking OpenRouter (evita listar modelos em cada geração).
+_RANK_CACHE: dict[str, Any] = {"key": None, "ids": (), "expires": 0.0}
+_RANK_CACHE_TTL_S = 180.0
 
 
 def ping_openrouter(
@@ -20,8 +26,6 @@ def ping_openrouter(
     One minimal chat completion (no JSON mode) to verify API key, network, and model id.
     Returns a dict: ok, model, latency_ms, reply_preview, http_status, error.
     """
-    import time
-
     out: dict[str, Any] = {
         "ok": False,
         "model": settings.model,
@@ -32,14 +36,7 @@ def ping_openrouter(
     }
     to = float(timeout_s) if timeout_s is not None else min(45.0, max(8.0, float(settings.timeout_s)))
 
-    headers: dict[str, str] = {
-        "Authorization": f"Bearer {settings.api_key}",
-        "Content-Type": "application/json",
-    }
-    if settings.http_referer:
-        headers["HTTP-Referer"] = settings.http_referer
-    if settings.x_title:
-        headers["X-Title"] = settings.x_title
+    headers = _auth_headers(settings)
 
     body: dict[str, Any] = {
         "model": settings.model,
@@ -83,7 +80,10 @@ def ping_openrouter(
     try:
         choice = data["choices"][0]
     except (KeyError, IndexError, TypeError) as e:
-        out["error"] = f"Resposta sem choices[0]: {e!s}; keys={list(data.keys()) if isinstance(data, dict) else type(data)}"
+        out["error"] = (
+            f"Resposta sem choices[0]: {e!s}; "
+            f"keys={list(data.keys()) if isinstance(data, dict) else type(data)}"
+        )
         return out
 
     message = choice.get("message")
@@ -138,18 +138,10 @@ def _content_blocks_to_text(content: Any) -> str:
             elif isinstance(block, str):
                 parts.append(block)
         return "".join(parts)
-    # Fallback (numbers, etc.)
     return str(content)
 
 
-def complete_chat(*, settings: Settings, system: str, user: str) -> tuple[str, str]:
-    """
-    Chat completion via OpenRouter.
-    Returns (content_text, model_id_used).
-
-    Com vários modelos no Settings.models, pede ao OpenRouter para escolher
-    o endpoint mais rápido/disponível no momento (sort + partition=none).
-    """
+def _auth_headers(settings: Settings) -> dict[str, str]:
     headers: dict[str, str] = {
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
@@ -158,10 +150,105 @@ def complete_chat(*, settings: Settings, system: str, user: str) -> tuple[str, s
         headers["HTTP-Referer"] = settings.http_referer
     if settings.x_title:
         headers["X-Title"] = settings.x_title
+    return headers
 
-    models = tuple(m for m in (settings.models or (settings.model,)) if m)
-    if not models:
-        models = (settings.model,)
+
+def _sort_query_for_route(route_sort: str) -> str:
+    if route_sort == "latency":
+        return "latency-low-to-high"
+    if route_sort == "price":
+        return "pricing-low-to-high"
+    return "throughput-high-to-low"
+
+
+def _fetch_ranked_model_ids(
+    *,
+    settings: Settings,
+    route_sort: str,
+) -> tuple[str, ...]:
+    """Lista IDs ordenados pelo OpenRouter (cache ~3 min)."""
+    sort_q = _sort_query_for_route(route_sort)
+    cache_key = sort_q
+    now = time.monotonic()
+    if (
+        _RANK_CACHE.get("key") == cache_key
+        and float(_RANK_CACHE.get("expires") or 0) > now
+        and _RANK_CACHE.get("ids")
+    ):
+        return tuple(_RANK_CACHE["ids"])
+
+    ids: list[str] = []
+    try:
+        with httpx.Client(timeout=min(20.0, max(5.0, float(settings.timeout_s)))) as client:
+            r = client.get(
+                OPENROUTER_MODELS_URL,
+                headers=_auth_headers(settings),
+                params={"sort": sort_q},
+            )
+        if r.status_code < 400:
+            data = r.json()
+            rows = data.get("data") if isinstance(data, dict) else None
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, dict):
+                        mid = row.get("id")
+                        if isinstance(mid, str) and mid.strip():
+                            ids.append(mid.strip())
+    except (httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError):
+        ids = []
+
+    if ids:
+        _RANK_CACHE["key"] = cache_key
+        _RANK_CACHE["ids"] = tuple(ids)
+        _RANK_CACHE["expires"] = now + _RANK_CACHE_TTL_S
+    return tuple(ids)
+
+
+def select_models_for_request(settings: Settings) -> tuple[str, ...]:
+    """
+    Escolhe até OPENROUTER_MODELS_REQUEST_CAP (=3) modelos do pool.
+
+    Se o pool for maior, prioriza os que o OpenRouter marca como melhores
+    agora (throughput/latency). Se o ranking falhar, usa a ordem do .env.
+    """
+    candidates = tuple(m for m in (settings.models or (settings.model,)) if m)
+    if not candidates:
+        candidates = (settings.model,)
+    cap = max(1, int(OPENROUTER_MODELS_REQUEST_CAP))
+    if len(candidates) <= cap:
+        return candidates
+
+    ranked = _fetch_ranked_model_ids(
+        settings=settings, route_sort=settings.route_sort or "throughput"
+    )
+    if not ranked:
+        return candidates[:cap]
+
+    want = set(candidates)
+    picked: list[str] = []
+    for mid in ranked:
+        if mid in want and mid not in picked:
+            picked.append(mid)
+            if len(picked) >= cap:
+                return tuple(picked)
+    for mid in candidates:
+        if mid not in picked:
+            picked.append(mid)
+            if len(picked) >= cap:
+                break
+    return tuple(picked[:cap])
+
+
+def complete_chat(*, settings: Settings, system: str, user: str) -> tuple[str, str]:
+    """
+    Chat completion via OpenRouter.
+    Returns (content_text, model_id_used).
+
+    Com vários modelos, pede ao OpenRouter para escolher o endpoint mais
+    rápido/disponível no momento (sort + partition=none), com no máx. 3 IDs.
+    """
+    headers = _auth_headers(settings)
+    models = select_models_for_request(settings)
 
     body: dict[str, Any] = {
         "max_tokens": settings.max_output_tokens,
@@ -174,8 +261,7 @@ def complete_chat(*, settings: Settings, system: str, user: str) -> tuple[str, s
     if len(models) == 1:
         body["model"] = models[0]
     else:
-        # Routing cross-model: OpenRouter escolhe pelo desempenho actual
-        # (não fica preso ao 1.º da lista). Ver docs «provider.sort.partition».
+        # Routing cross-model (máx. 3). Ver docs «provider.sort.partition».
         body["models"] = list(models)
         body["provider"] = {
             "allow_fallbacks": True,
@@ -212,12 +298,15 @@ def complete_chat(*, settings: Settings, system: str, user: str) -> tuple[str, s
     try:
         choice = data["choices"][0]
     except (KeyError, IndexError, TypeError) as e:
-        raise RuntimeError(f"OpenRouter: missing choices[0]. Body keys: {list(data.keys())!r}") from e
+        raise RuntimeError(
+            f"OpenRouter: missing choices[0]. Body keys: {list(data.keys())!r}"
+        ) from e
 
     message = choice.get("message")
     if not isinstance(message, dict):
         raise RuntimeError(
-            f"OpenRouter: unexpected message type {type(message)!r}. choice={_short_json(choice)}"
+            f"OpenRouter: unexpected message type {type(message)!r}. "
+            f"choice={_short_json(choice)}"
         )
 
     text = _content_blocks_to_text(message.get("content")).strip()
@@ -227,7 +316,6 @@ def complete_chat(*, settings: Settings, system: str, user: str) -> tuple[str, s
             text = legacy.strip()
 
     if not text:
-        # Some models put text elsewhere or return only tool calls / refusals
         refusal = message.get("refusal")
         reasoning = message.get("reasoning")
         fr = choice.get("finish_reason")

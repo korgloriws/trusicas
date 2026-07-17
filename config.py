@@ -26,8 +26,9 @@ DEFAULT_MAX_OUTPUT_TOKENS = 32_768
 # Hard cap on what we send as max_tokens (OpenRouter may 400 if the value exceeds the model/route limit).
 OPENROUTER_MAX_TOKENS_REQUEST_CAP = 65_536
 
-# Pool gratuito por defeito. OpenRouter escolhe o mais disponível/rápido no momento
-# (provider.sort + partition=none). Nota: openai/gpt-oss-120b:free não existe — usamos :20b:free.
+# Pool gratuito por defeito (candidatos). Em cada pedido enviamos no máx. 3 ao
+# OpenRouter (limite da API), escolhendo os melhores no momento via /models?sort=…
+# Nota: openai/gpt-oss-120b:free não existe — usamos openai/gpt-oss-20b:free.
 DEFAULT_FREE_MODELS: tuple[str, ...] = (
     "nvidia/nemotron-3-super-120b-a12b:free",
     "qwen/qwen3-coder:free",
@@ -35,6 +36,9 @@ DEFAULT_FREE_MODELS: tuple[str, ...] = (
     "tencent/hy3:free",
     "nvidia/nemotron-3-ultra-550b-a55b:free",
 )
+
+# Limite do OpenRouter: "'models' array must have 3 items or fewer."
+OPENROUTER_MODELS_REQUEST_CAP = 3
 
 # Aliases conhecidos quando o slug pedido deixou de existir no OpenRouter.
 _MODEL_ALIASES: dict[str, str] = {
