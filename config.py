@@ -26,17 +26,70 @@ DEFAULT_MAX_OUTPUT_TOKENS = 32_768
 # Hard cap on what we send as max_tokens (OpenRouter may 400 if the value exceeds the model/route limit).
 OPENROUTER_MAX_TOKENS_REQUEST_CAP = 65_536
 
+# Pool gratuito por defeito. OpenRouter escolhe o mais disponível/rápido no momento
+# (provider.sort + partition=none). Nota: openai/gpt-oss-120b:free não existe — usamos :20b:free.
+DEFAULT_FREE_MODELS: tuple[str, ...] = (
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "qwen/qwen3-coder:free",
+    "openai/gpt-oss-20b:free",
+    "tencent/hy3:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+)
+
+# Aliases conhecidos quando o slug pedido deixou de existir no OpenRouter.
+_MODEL_ALIASES: dict[str, str] = {
+    "openai/gpt-oss-120b:free": "openai/gpt-oss-20b:free",
+}
+
 
 @dataclass(frozen=True)
 class Settings:
     api_key: str
+    """Modelo principal (primeiro do pool / override único)."""
     model: str
+    """Pool enviado ao OpenRouter em «models» para routing por disponibilidade."""
+    models: tuple[str, ...]
+    """Ordenação: throughput (melhor p/ lições longas) ou latency (1.º token)."""
+    route_sort: str
     http_referer: str | None
     x_title: str | None
     json_mode: bool
     temperature: float
     timeout_s: float
     max_output_tokens: int
+
+
+def _normalize_model_id(raw: str) -> str:
+    mid = raw.strip()
+    return _MODEL_ALIASES.get(mid, mid)
+
+
+def _parse_models_env() -> tuple[str, ...]:
+    """
+    OPENROUTER_MODELS = lista separada por vírgulas.
+    Se vazio, usa OPENROUTER_MODEL se definido; senão o pool DEFAULT_FREE_MODELS.
+    """
+    raw_list = (os.getenv("OPENROUTER_MODELS") or "").strip()
+    if raw_list:
+        parts = [_normalize_model_id(p) for p in raw_list.split(",")]
+        models = tuple(dict.fromkeys(p for p in parts if p))
+        if models:
+            return models
+
+    single = (os.getenv("OPENROUTER_MODEL") or "").strip()
+    if single:
+        return (_normalize_model_id(single),)
+
+    return DEFAULT_FREE_MODELS
+
+
+def _parse_route_sort() -> str:
+    raw = (os.getenv("OPENROUTER_ROUTE_SORT") or "throughput").strip().lower()
+    if raw in {"latency", "ttft"}:
+        return "latency"
+    if raw in {"price"}:
+        return "price"
+    return "throughput"
 
 
 def load_settings(*, temperature: float | None = None) -> Settings:
@@ -46,10 +99,9 @@ def load_settings(*, temperature: float | None = None) -> Settings:
         raise RuntimeError(
             "Missing OPENROUTER_API_KEY. Copy .env.example to .env and set your key."
         )
-    model = (
-        os.getenv("OPENROUTER_MODEL")
-        or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
-    ).strip()
+    models = _parse_models_env()
+    model = models[0]
+    route_sort = _parse_route_sort()
     http_referer = (os.getenv("OPENROUTER_HTTP_REFERER") or "").strip() or None
     x_title = (os.getenv("OPENROUTER_X_TITLE") or "").strip() or None
     json_mode = _truthy(os.getenv("OPENROUTER_JSON_MODE", "false"))
@@ -64,6 +116,8 @@ def load_settings(*, temperature: float | None = None) -> Settings:
     return Settings(
         api_key=api_key,
         model=model,
+        models=models,
+        route_sort=route_sort,
         http_referer=http_referer,
         x_title=x_title,
         json_mode=json_mode,

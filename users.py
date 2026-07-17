@@ -218,6 +218,8 @@ def delete_user(user_id: int, *, actor_id: int | None = None) -> None:
             ).fetchone()
             if int(admins["n"]) <= 1:
                 raise ValueError("Não é possível apagar o último administrador.")
+        conn.execute("DELETE FROM playlist_lessons WHERE playlist_id IN (SELECT id FROM playlists WHERE user_id = ?)", (user_id,))
+        conn.execute("DELETE FROM playlists WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM lessons WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()

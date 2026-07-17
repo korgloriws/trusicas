@@ -22,7 +22,8 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
         return 1
     if args.model:
-        settings = replace(settings, model=args.model.strip())
+        mid = args.model.strip()
+        settings = replace(settings, model=mid, models=(mid,))
     result = ping_openrouter(settings=settings, timeout_s=args.timeout)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("ok") else 2

@@ -142,7 +142,14 @@ def _content_blocks_to_text(content: Any) -> str:
     return str(content)
 
 
-def complete_chat(*, settings: Settings, system: str, user: str) -> str:
+def complete_chat(*, settings: Settings, system: str, user: str) -> tuple[str, str]:
+    """
+    Chat completion via OpenRouter.
+    Returns (content_text, model_id_used).
+
+    Com vários modelos no Settings.models, pede ao OpenRouter para escolher
+    o endpoint mais rápido/disponível no momento (sort + partition=none).
+    """
     headers: dict[str, str] = {
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
@@ -152,8 +159,11 @@ def complete_chat(*, settings: Settings, system: str, user: str) -> str:
     if settings.x_title:
         headers["X-Title"] = settings.x_title
 
+    models = tuple(m for m in (settings.models or (settings.model,)) if m)
+    if not models:
+        models = (settings.model,)
+
     body: dict[str, Any] = {
-        "model": settings.model,
         "max_tokens": settings.max_output_tokens,
         "temperature": settings.temperature,
         "messages": [
@@ -161,6 +171,19 @@ def complete_chat(*, settings: Settings, system: str, user: str) -> str:
             {"role": "user", "content": user},
         ],
     }
+    if len(models) == 1:
+        body["model"] = models[0]
+    else:
+        # Routing cross-model: OpenRouter escolhe pelo desempenho actual
+        # (não fica preso ao 1.º da lista). Ver docs «provider.sort.partition».
+        body["models"] = list(models)
+        body["provider"] = {
+            "allow_fallbacks": True,
+            "sort": {
+                "by": settings.route_sort or "throughput",
+                "partition": "none",
+            },
+        }
     if settings.json_mode:
         body["response_format"] = {"type": "json_object"}
 
@@ -177,6 +200,14 @@ def complete_chat(*, settings: Settings, system: str, user: str) -> str:
         if isinstance(err, dict):
             err = err.get("message") or err.get("metadata") or err
         raise RuntimeError(f"OpenRouter (corpo com erro): {err!r}")
+
+    model_used = ""
+    if isinstance(data, dict):
+        raw_model = data.get("model")
+        if isinstance(raw_model, str) and raw_model.strip():
+            model_used = raw_model.strip()
+    if not model_used:
+        model_used = models[0]
 
     try:
         choice = data["choices"][0]
@@ -202,13 +233,13 @@ def complete_chat(*, settings: Settings, system: str, user: str) -> str:
         fr = choice.get("finish_reason")
         raise RuntimeError(
             "OpenRouter devolveu conteúdo vazio no message.content. "
-            f"finish_reason={fr!r}, model={settings.model!r}. "
+            f"finish_reason={fr!r}, model={model_used!r}. "
             f"message keys={sorted(message.keys())!r}. "
             f"refusal={refusal!r}, reasoning_preview={_preview(reasoning)}. "
             f"choice_preview={_short_json(choice)}"
         )
 
-    return text
+    return text, model_used
 
 
 def _preview(val: Any, limit: int = 400) -> str:

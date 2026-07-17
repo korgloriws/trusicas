@@ -16,18 +16,32 @@ from auth import (
     require_admin,
     require_login,
 )
+from fetch_cifra import fetch_cifra
 from fetch_lyrics import fetch_lyrics
 from generate import generate_lesson
 from store import (
+    add_lesson_to_playlist,
+    create_playlist,
     delete_lesson,
+    delete_playlist,
     export_db_bytes,
+    find_shared_cifra,
+    find_shared_lesson,
+    find_shared_lyrics,
     get_lesson,
+    get_playlist,
     init_db,
     insert_lesson,
     list_lessons,
     list_lessons_grouped_by_artist,
+    list_playlists,
+    move_lesson_between_playlists,
     patch_lesson_metadata,
+    remove_lesson_from_playlist,
+    rename_playlist,
     restore_db_bytes,
+    save_shared_cifra,
+    save_shared_lyrics,
     update_lesson,
 )
 from users import (
@@ -193,12 +207,56 @@ def create_app() -> Flask:
         assert user is not None
         return int(user["id"])
 
+    def _normalize_cifra(value: Any) -> str:
+        return str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    def _apply_cifra_to_lesson(
+        lesson: dict[str, Any],
+        *,
+        cifra_text: str | None,
+        title_hint: str | None,
+        artist_hint: str | None,
+        keep_existing: bool = True,
+    ) -> dict[str, Any]:
+        out = dict(lesson)
+        text = _normalize_cifra(cifra_text)
+        if not text and keep_existing:
+            prev = out.get("cifra")
+            if isinstance(prev, str):
+                text = _normalize_cifra(prev)
+            elif isinstance(prev, dict):
+                text = _normalize_cifra(prev.get("text"))
+        if not text:
+            text = _normalize_cifra(find_shared_cifra(title_hint, artist_hint))
+        if text:
+            out["cifra"] = {"text": text, "source": "user"}
+            save_shared_cifra(title=title_hint, artist=artist_hint, cifra_text=text)
+        elif "cifra" in out:
+            del out["cifra"]
+        return out
+
     @app.post("/api/lyrics/fetch")
     @require_login
     def api_lyrics_fetch():
         payload = request.get_json(silent=True) or {}
         title = str(payload.get("title") or "").strip()
         artist = str(payload.get("artist") or "").strip()
+        shared_cifra = find_shared_cifra(title, artist)
+
+        cached = find_shared_lyrics(title, artist)
+        if cached:
+            return jsonify(
+                {
+                    "ok": True,
+                    "lyrics": cached["lyrics_en"],
+                    "title": cached["title"],
+                    "artist": cached["artist"],
+                    "cifra": shared_cifra,
+                    "from_cache": True,
+                    "candidates": [],
+                }
+            )
+
         result = fetch_lyrics(title, artist)
         if not result.ok:
             return (
@@ -211,14 +269,105 @@ def create_app() -> Flask:
                 ),
                 404,
             )
+        save_shared_lyrics(
+            title=result.title or title,
+            artist=result.artist or artist,
+            lyrics_en=result.lyrics,
+        )
         return jsonify(
             {
                 "ok": True,
                 "lyrics": result.lyrics,
                 "title": result.title,
                 "artist": result.artist,
-                "source": result.source,
+                "cifra": shared_cifra or find_shared_cifra(result.title or title, result.artist or artist),
+                "from_cache": False,
                 "candidates": result.candidates or [],
+            }
+        )
+
+    @app.post("/api/cifra/fetch")
+    @require_login
+    def api_cifra_fetch():
+        payload = request.get_json(silent=True) or {}
+        title = str(payload.get("title") or "").strip()
+        artist = str(payload.get("artist") or "").strip()
+        uid = _uid()
+        lesson_id: int | None = None
+        raw_id = payload.get("lesson_id")
+        if raw_id is not None and str(raw_id).strip() != "":
+            try:
+                lesson_id = int(raw_id)
+            except (TypeError, ValueError):
+                lesson_id = None
+
+        cifra_text = find_shared_cifra(title, artist)
+        from_cache = bool(cifra_text)
+        title_out, artist_out = title, artist
+        source = "cache" if from_cache else None
+        candidates: list[Any] = []
+
+        if not cifra_text:
+            result = fetch_cifra(title, artist)
+            if not result.ok:
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error": result.error,
+                            "candidates": result.candidates or [],
+                        }
+                    ),
+                    404,
+                )
+            cifra_text = result.cifra
+            title_out = result.title or title
+            artist_out = result.artist or artist
+            source = result.source
+            candidates = result.candidates or []
+            save_shared_cifra(
+                title=title_out,
+                artist=artist_out,
+                cifra_text=cifra_text,
+            )
+        else:
+            save_shared_cifra(title=title_out, artist=artist_out, cifra_text=cifra_text)
+
+        saved = None
+        lesson_out = None
+        if lesson_id is not None:
+            existing = get_lesson(lesson_id, user_id=uid)
+            if existing is None:
+                return jsonify({"ok": False, "error": "Lição não encontrada para guardar a cifra."}), 404
+            lesson_obj = existing.get("lesson") if isinstance(existing.get("lesson"), dict) else {}
+            lesson_obj = dict(lesson_obj)
+            lesson_obj["cifra"] = {
+                "text": cifra_text,
+                "source": source or "user",
+            }
+            saved = patch_lesson_metadata(
+                lesson_id,
+                user_id=uid,
+                lyrics_en=str(existing.get("lyrics_en") or ""),
+                title_hint=existing.get("title_hint") or title_out or None,
+                artist_hint=existing.get("artist_hint") or artist_out or None,
+                lesson=lesson_obj,
+            )
+            lesson_out = lesson_obj
+            if saved is None:
+                return jsonify({"ok": False, "error": "Cifra encontrada, mas falhou ao guardar na lição."}), 500
+
+        return jsonify(
+            {
+                "ok": True,
+                "cifra": cifra_text,
+                "title": title_out,
+                "artist": artist_out,
+                "from_cache": from_cache,
+                "source": source,
+                "candidates": candidates,
+                "saved": saved,
+                "lesson": lesson_out,
             }
         )
 
@@ -231,11 +380,77 @@ def create_app() -> Flask:
         artist = payload.get("artist")
         title_hint = str(title).strip() if title else None
         artist_hint = str(artist).strip() if artist else None
+        cifra_in = _normalize_cifra(payload.get("cifra"))
         model = payload.get("model")
         model_override = str(model).strip() if model else None
         temp = payload.get("temperature")
         temperature = float(temp) if temp is not None and str(temp).strip() != "" else None
         uid = _uid()
+        force = bool(payload.get("force"))
+
+        replace_raw = payload.get("replace_lesson_id")
+        replace_id: int | None = None
+        if replace_raw is not None and str(replace_raw).strip() != "":
+            try:
+                replace_id = int(replace_raw)
+            except (TypeError, ValueError):
+                replace_id = None
+
+        # Reutilizar lição já gerada (salvo regeneração forçada / substituição explícita)
+        if not force and replace_id is None and lyrics:
+            shared = find_shared_lesson(
+                title=title_hint,
+                artist=artist_hint,
+                lyrics_en=lyrics,
+                prefer_user_id=uid,
+            )
+            if shared is not None:
+                lesson = _apply_cifra_to_lesson(
+                    shared["lesson"],
+                    cifra_text=cifra_in,
+                    title_hint=shared.get("title_hint") or title_hint,
+                    artist_hint=shared.get("artist_hint") or artist_hint,
+                    keep_existing=True,
+                )
+                # Já é do próprio utilizador: devolve a existente sem duplicar
+                if shared.get("user_id") == uid:
+                    saved = {
+                        "id": shared["id"],
+                        "created_at": shared["created_at"],
+                    }
+                    return jsonify(
+                        {
+                            "ok": True,
+                            "lesson": lesson,
+                            "raw": shared.get("raw_response") or "",
+                            "saved": saved,
+                            "replaced": False,
+                            "from_cache": True,
+                            "reused_own": True,
+                        }
+                    )
+                # De outro utilizador: clona para a conta atual
+                saved = insert_lesson(
+                    user_id=uid,
+                    lyrics_en=shared.get("lyrics_en") or lyrics,
+                    title_hint=shared.get("title_hint") or title_hint,
+                    artist_hint=shared.get("artist_hint") or artist_hint,
+                    model=shared.get("model") or "reutilizado",
+                    lesson=lesson,
+                    raw_response=shared.get("raw_response")
+                    or "(lição reutilizada da coleção partilhada)",
+                )
+                return jsonify(
+                    {
+                        "ok": True,
+                        "lesson": lesson,
+                        "raw": shared.get("raw_response") or "",
+                        "saved": saved,
+                        "replaced": False,
+                        "from_cache": True,
+                        "reused_own": False,
+                    }
+                )
 
         result = generate_lesson(
             lyrics,
@@ -255,16 +470,31 @@ def create_app() -> Flask:
                 ),
                 422,
             )
-        replace_raw = payload.get("replace_lesson_id")
-        replace_id: int | None = None
-        if replace_raw is not None and str(replace_raw).strip() != "":
-            try:
-                replace_id = int(replace_raw)
-            except (TypeError, ValueError):
-                replace_id = None
+
+        prev_lesson = None
         if replace_id is not None:
-            if get_lesson(replace_id, user_id=uid) is None:
+            prev = get_lesson(replace_id, user_id=uid)
+            if prev is None:
                 return jsonify({"ok": False, "error": "Lição a substituir não encontrada."}), 404
+            prev_lesson = prev.get("lesson") if isinstance(prev.get("lesson"), dict) else None
+
+        lesson = dict(result.lesson)
+        cifra_use = cifra_in
+        if not cifra_use and prev_lesson:
+            prev_c = prev_lesson.get("cifra")
+            if isinstance(prev_c, str):
+                cifra_use = _normalize_cifra(prev_c)
+            elif isinstance(prev_c, dict):
+                cifra_use = _normalize_cifra(prev_c.get("text"))
+        lesson = _apply_cifra_to_lesson(
+            lesson,
+            cifra_text=cifra_use,
+            title_hint=title_hint,
+            artist_hint=artist_hint,
+            keep_existing=False,
+        )
+
+        if replace_id is not None:
             saved = update_lesson(
                 replace_id,
                 user_id=uid,
@@ -272,7 +502,7 @@ def create_app() -> Flask:
                 title_hint=title_hint,
                 artist_hint=artist_hint,
                 model=result.model_used,
-                lesson=result.lesson,
+                lesson=lesson,
                 raw_response=result.raw,
             )
             if saved is None:
@@ -284,18 +514,38 @@ def create_app() -> Flask:
                 title_hint=title_hint,
                 artist_hint=artist_hint,
                 model=result.model_used,
-                lesson=result.lesson,
+                lesson=lesson,
                 raw_response=result.raw,
             )
         return jsonify(
             {
                 "ok": True,
-                "lesson": result.lesson,
+                "lesson": lesson,
                 "raw": result.raw,
                 "saved": saved,
                 "replaced": replace_id is not None,
+                "from_cache": False,
+                "model_used": result.model_used,
             }
         )
+
+    def _parse_playlist_id_arg() -> int | None:
+        raw = request.args.get("playlist_id", "").strip()
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def _playlist_json(p: Any) -> dict[str, Any]:
+        return {
+            "id": p.id,
+            "name": p.name,
+            "created_at": p.created_at,
+            "lesson_count": p.lesson_count,
+            "sort_order": p.sort_order,
+        }
 
     @app.get("/api/lessons")
     @require_login
@@ -305,13 +555,18 @@ def create_app() -> Flask:
             limit = int(request.args.get("limit", "100"))
         except ValueError:
             limit = 100
+        playlist_id = _parse_playlist_id_arg()
+        if playlist_id is not None and get_playlist(playlist_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lista não encontrada."}), 404
         flat = request.args.get("flat", "").strip().lower() in {"1", "true", "yes"}
         if flat:
             try:
                 offset = int(request.args.get("offset", "0"))
             except ValueError:
                 offset = 0
-            rows = list_lessons(user_id=uid, limit=limit, offset=offset)
+            rows = list_lessons(
+                user_id=uid, limit=limit, offset=offset, playlist_id=playlist_id
+            )
             return jsonify(
                 {
                     "ok": True,
@@ -326,13 +581,129 @@ def create_app() -> Flask:
                         }
                         for r in rows
                     ],
+                    "playlist_id": playlist_id,
                 }
             )
         q = request.args.get("q", "").strip()
         groups, total = list_lessons_grouped_by_artist(
-            user_id=uid, limit=limit, search=q or None
+            user_id=uid,
+            limit=limit,
+            search=q or None,
+            playlist_id=playlist_id,
         )
-        return jsonify({"ok": True, "groups": groups, "total": total, "query": q})
+        return jsonify(
+            {
+                "ok": True,
+                "groups": groups,
+                "total": total,
+                "query": q,
+                "playlist_id": playlist_id,
+            }
+        )
+
+    @app.get("/api/playlists")
+    @require_login
+    def api_list_playlists():
+        rows = list_playlists(user_id=_uid())
+        return jsonify({"ok": True, "playlists": [_playlist_json(p) for p in rows]})
+
+    @app.post("/api/playlists")
+    @require_login
+    def api_create_playlist():
+        payload = request.get_json(silent=True) or {}
+        try:
+            created = create_playlist(
+                user_id=_uid(), name=str(payload.get("name") or "")
+            )
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        return jsonify({"ok": True, "playlist": _playlist_json(created)}), 201
+
+    @app.patch("/api/playlists/<int:playlist_id>")
+    @require_login
+    def api_rename_playlist(playlist_id: int):
+        payload = request.get_json(silent=True) or {}
+        try:
+            updated = rename_playlist(
+                playlist_id, user_id=_uid(), name=str(payload.get("name") or "")
+            )
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        if updated is None:
+            return jsonify({"ok": False, "error": "Lista não encontrada."}), 404
+        return jsonify({"ok": True, "playlist": _playlist_json(updated)})
+
+    @app.delete("/api/playlists/<int:playlist_id>")
+    @require_login
+    def api_delete_playlist(playlist_id: int):
+        if not delete_playlist(playlist_id, user_id=_uid()):
+            return jsonify({"ok": False, "error": "Lista não encontrada."}), 404
+        return jsonify({"ok": True})
+
+    @app.post("/api/playlists/<int:playlist_id>/lessons")
+    @require_login
+    def api_add_lesson_to_playlist(playlist_id: int):
+        payload = request.get_json(silent=True) or {}
+        try:
+            lesson_id = int(payload.get("lesson_id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Indique o lesson_id."}), 400
+        uid = _uid()
+        if get_playlist(playlist_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lista não encontrada."}), 404
+        if get_lesson(lesson_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+        add_lesson_to_playlist(playlist_id, user_id=uid, lesson_id=lesson_id)
+        return jsonify({"ok": True})
+
+    @app.delete("/api/playlists/<int:playlist_id>/lessons/<int:lesson_id>")
+    @require_login
+    def api_remove_lesson_from_playlist(playlist_id: int, lesson_id: int):
+        uid = _uid()
+        if get_playlist(playlist_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lista não encontrada."}), 404
+        if not remove_lesson_from_playlist(
+            playlist_id, user_id=uid, lesson_id=lesson_id
+        ):
+            return jsonify(
+                {"ok": False, "error": "A música não está nesta lista."}
+            ), 404
+        return jsonify({"ok": True})
+
+    @app.post("/api/lessons/<int:lesson_id>/move")
+    @require_login
+    def api_move_lesson(lesson_id: int):
+        payload = request.get_json(silent=True) or {}
+        try:
+            to_playlist_id = int(payload.get("to_playlist_id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Indique to_playlist_id."}), 400
+        from_raw = payload.get("from_playlist_id", None)
+        from_playlist_id: int | None
+        if from_raw is None or from_raw == "":
+            from_playlist_id = None
+        else:
+            try:
+                from_playlist_id = int(from_raw)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "from_playlist_id inválido."}), 400
+        uid = _uid()
+        if get_lesson(lesson_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+        if get_playlist(to_playlist_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lista de destino não encontrada."}), 404
+        if from_playlist_id is not None and get_playlist(
+            from_playlist_id, user_id=uid
+        ) is None:
+            return jsonify({"ok": False, "error": "Lista de origem não encontrada."}), 404
+        if not move_lesson_between_playlists(
+            user_id=uid,
+            lesson_id=lesson_id,
+            to_playlist_id=to_playlist_id,
+            from_playlist_id=from_playlist_id,
+        ):
+            return jsonify({"ok": False, "error": "Não foi possível migrar a música."}), 400
+        return jsonify({"ok": True})
 
     @app.get("/api/lessons/<int:lesson_id>")
     @require_login

@@ -121,4 +121,19 @@ def lesson_dict_to_markdown(lesson: dict[str, Any]) -> str:
         if body:
             lines.append(body)
             lines.append("")
+    cifra = lesson.get("cifra")
+    cifra_text = ""
+    if isinstance(cifra, str):
+        cifra_text = cifra.strip()
+    elif isinstance(cifra, dict):
+        cifra_text = str(cifra.get("text") or "").strip()
+    if cifra_text:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Cifra")
+        lines.append("")
+        lines.append("```")
+        lines.append(cifra_text)
+        lines.append("```")
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"

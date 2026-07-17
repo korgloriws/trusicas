@@ -35,12 +35,14 @@ python -m pip install -r requirements.txt
 python __main__.py --input sample-lyrics.txt --out-dir output --basename teste01
 ```
 
-Ajuste o modelo quando quiser no `.env`:
+Ajuste o pool de modelos no `.env` (OpenRouter escolhe o mais disponível/rápido):
 
 ```
-OPENROUTER_MODEL=openrouter/owl-alpha
+OPENROUTER_MODELS=nvidia/nemotron-3-super-120b-a12b:free,qwen/qwen3-coder:free,openai/gpt-oss-20b:free,tencent/hy3:free,nvidia/nemotron-3-ultra-550b-a55b:free
+OPENROUTER_ROUTE_SORT=throughput
 ```
 
+Para forçar um único modelo numa geração: `--model outro/modelo`.
 ### Interface web (HTML + Flask, servido pelo Python)
 
 Na pasta `trusicas`:
@@ -104,8 +106,7 @@ Se o modelo devolver JSON inválido, o `.raw.txt` ajuda a ajustar o prompt ou tr
 
 ## Trocar de modelo
 
-Altere só `OPENROUTER_MODEL` no `.env`, ou use `--model outro/modelo` na linha de comando.
-
+Defina `OPENROUTER_MODELS` (lista) no `.env` para routing automático, ou `OPENROUTER_MODEL` para um só modelo. Na CLI: `--model outro/modelo`.
 ## Opcional: ambiente virtual (venv)
 
 Se mais tarde você quiser **isolar** dependências deste projeto:

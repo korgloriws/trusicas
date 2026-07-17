@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from client import complete_chat
@@ -33,14 +33,17 @@ def generate_lesson(
 
     settings = load_settings(temperature=temperature)
     if model:
-        from dataclasses import replace
-
-        settings = replace(settings, model=model.strip())
+        mid = model.strip()
+        if mid:
+            # Override explícito: um só modelo (sem routing do pool).
+            settings = replace(settings, model=mid, models=(mid,))
     model_used = settings.model
 
     user = build_user_prompt(text, title_hint=title_hint, artist_hint=artist_hint)
     try:
-        raw = complete_chat(settings=settings, system=SYSTEM_PROMPT, user=user)
+        raw, model_used = complete_chat(
+            settings=settings, system=SYSTEM_PROMPT, user=user
+        )
     except RuntimeError as e:
         return GenerateResult(ok=False, lesson=None, raw="", error=str(e), model_used=model_used)
     try:

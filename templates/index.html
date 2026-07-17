@@ -158,6 +158,14 @@
             </div>
             <textarea id="lyrics" class="input textarea" rows="14" spellcheck="false" placeholder="Paste the English lyrics here…"></textarea>
           </div>
+
+          <div class="field cifra-field">
+            <div class="lyrics-field-head">
+              <label class="field-label" for="cifra">Cifra <span class="opt">opcional</span></label>
+              <span class="lyrics-field-hint muted">Opcional ao criar. A busca automática fica na aba Cifra da lição.</span>
+            </div>
+            <textarea id="cifra" class="input textarea textarea-cifra" rows="8" spellcheck="false" placeholder="Ex.:&#10;Am          F&#10;Hello darkness, my old friend…"></textarea>
+          </div>
         </div>
         <div class="toolbar">
           <div class="toolbar-actions">
@@ -205,6 +213,7 @@
             <button type="button" class="tab-chip" data-tab="vocabulary" role="tab" aria-selected="false">Vocabulário</button>
             <button type="button" class="tab-chip" data-tab="examples" role="tab" aria-selected="false">Exemplos</button>
             <button type="button" class="tab-chip" data-tab="curiosities" role="tab" aria-selected="false">Curiosidades</button>
+            <button type="button" class="tab-chip" data-tab="cifra" role="tab" aria-selected="false">Cifra</button>
           </nav>
           <div class="tab-body">
             <div id="panel-translation" class="tab-panel active" role="tabpanel"></div>
@@ -212,6 +221,7 @@
             <div id="panel-vocabulary" class="tab-panel" role="tabpanel" hidden></div>
             <div id="panel-examples" class="tab-panel" role="tabpanel" hidden></div>
             <div id="panel-curiosities" class="tab-panel" role="tabpanel" hidden></div>
+            <div id="panel-cifra" class="tab-panel" role="tabpanel" hidden></div>
           </div>
         </div>
       </section>
@@ -222,7 +232,7 @@
         <div class="library-head">
           <div>
             <h2 class="surface-title">Biblioteca</h2>
-            <p class="surface-desc">Abra uma lição ou use o treino aleatório para praticar inglês com uma faixa da sua coleção.</p>
+            <p class="surface-desc">Organize músicas em listas, abra uma lição ou use o treino aleatório na lista actual.</p>
           </div>
           <div class="library-head-controls">
             <label class="visually-hidden" for="library-search">Buscar na biblioteca</label>
@@ -240,11 +250,30 @@
             </button>
           </div>
         </div>
+        <section class="playlist-bar" aria-label="Listas de músicas">
+          <div class="playlist-bar-row">
+            <label class="visually-hidden" for="playlist-select">Lista</label>
+            <select id="playlist-select" class="input playlist-select">
+              <option value="">Todas as músicas</option>
+            </select>
+            <div class="playlist-bar-actions">
+              <button type="button" id="btn-playlist-new" class="btn btn-secondary btn-icon" title="Nova lista" aria-label="Nova lista">
+                <span aria-hidden="true">+</span>
+              </button>
+              <button type="button" id="btn-playlist-rename" class="btn btn-secondary btn-icon" title="Renomear lista" aria-label="Renomear lista" disabled>
+                <span aria-hidden="true">✎</span>
+              </button>
+              <button type="button" id="btn-playlist-delete" class="btn btn-ghost-danger btn-icon" title="Excluir lista" aria-label="Excluir lista" disabled>
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+          </div>
+        </section>
         <div id="library-status" class="pill-status pill-status-block" aria-live="polite"></div>
         <section class="train-panel" aria-label="Treino aleatório">
           <div class="train-panel-copy">
             <h3 class="train-panel-title">Treino aleatório</h3>
-            <p class="train-panel-desc">A roleta percorre as faixas da biblioteca e para numa música para você treinar vocabulário, estruturas e exemplos.</p>
+            <p class="train-panel-desc">A roleta percorre as faixas da lista seleccionada e para numa música para você treinar vocabulário, estruturas e exemplos.</p>
           </div>
           <div class="train-panel-action">
             <button type="button" id="btn-random-train" class="btn btn-primary btn-train-spin">
@@ -365,6 +394,52 @@
             </thead>
             <tbody id="users-tbody"></tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="playlist-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="playlist-modal-title" hidden>
+    <button type="button" class="modal-backdrop" data-close-playlist-modal aria-label="Fechar"></button>
+    <div class="modal-panel" role="document">
+      <header class="modal-head">
+        <h2 id="playlist-modal-title" class="modal-title">Nova lista</h2>
+        <button type="button" class="modal-close" data-close-playlist-modal aria-label="Fechar">Fechar</button>
+      </header>
+      <form id="playlist-form" class="modal-body" autocomplete="off">
+        <p id="playlist-modal-desc" class="modal-desc">Dê um nome à lista para organizar as suas músicas (ex.: estudar inglês com rock).</p>
+        <p id="playlist-modal-error" class="modal-error hidden" role="alert"></p>
+        <label class="field-label" for="playlist-name-input">Nome da lista</label>
+        <input
+          type="text"
+          id="playlist-name-input"
+          class="input"
+          maxlength="80"
+          required
+          placeholder="ex.: músicas para treinar"
+          autocomplete="off"
+        />
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-playlist-modal>Cancelar</button>
+          <button type="submit" id="playlist-form-submit" class="btn btn-primary">Criar lista</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="lesson-lists-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="lesson-lists-modal-title" hidden>
+    <button type="button" class="modal-backdrop" data-close-lesson-lists-modal aria-label="Fechar"></button>
+    <div class="modal-panel" role="document">
+      <header class="modal-head">
+        <h2 id="lesson-lists-modal-title" class="modal-title">Organizar</h2>
+        <button type="button" class="modal-close" data-close-lesson-lists-modal aria-label="Fechar">Fechar</button>
+      </header>
+      <div class="modal-body">
+        <p id="lesson-lists-song" class="modal-desc"></p>
+        <p id="lesson-lists-error" class="modal-error hidden" role="alert"></p>
+        <div id="lesson-lists-options" class="lesson-lists-options" role="list"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-lesson-lists-modal>Fechar</button>
         </div>
       </div>
     </div>
