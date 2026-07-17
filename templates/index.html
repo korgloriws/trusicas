@@ -33,30 +33,86 @@
         height="96"
         decoding="async"
       />
-      <h1 class="login-gate-title">Entrar</h1>
-      <p class="login-gate-desc">Aceda à sua biblioteca pessoal de músicas e traduções.</p>
-      <form id="login-form" autocomplete="on">
-        <p id="login-error" class="modal-error hidden" role="alert"></p>
-        <label class="field-label" for="login-username">Utilizador</label>
-        <input
-          type="text"
-          id="login-username"
-          class="input"
-          autocomplete="username"
-          placeholder="o seu utilizador"
-          required
-        />
-        <label class="field-label" for="login-password">Senha</label>
-        <input
-          type="password"
-          id="login-password"
-          class="input"
-          autocomplete="current-password"
-          placeholder="a sua senha"
-          required
-        />
-        <button type="submit" id="btn-login" class="btn btn-primary login-gate-submit">Entrar</button>
-      </form>
+      <nav class="login-gate-tabs" role="tablist" aria-label="Conta">
+        <button type="button" class="login-gate-tab active" data-auth-panel="login" role="tab" aria-selected="true">Entrar</button>
+        <button type="button" class="login-gate-tab" data-auth-panel="register" role="tab" aria-selected="false">Criar conta</button>
+        <button type="button" class="login-gate-tab" data-auth-panel="recover" role="tab" aria-selected="false">Recuperar</button>
+      </nav>
+
+      <div id="auth-panel-login" class="auth-panel" data-auth-panel-body="login">
+        <h1 class="login-gate-title">Entrar</h1>
+        <p class="login-gate-desc">Aceda à sua biblioteca pessoal de músicas e traduções.</p>
+        <form id="login-form" autocomplete="on">
+          <p id="login-error" class="modal-error hidden" role="alert"></p>
+          <label class="field-label" for="login-username">Utilizador</label>
+          <input
+            type="text"
+            id="login-username"
+            class="input"
+            autocomplete="username"
+            placeholder="o seu utilizador"
+            required
+          />
+          <label class="field-label" for="login-password">Senha</label>
+          <input
+            type="password"
+            id="login-password"
+            class="input"
+            autocomplete="current-password"
+            placeholder="a sua senha"
+            required
+          />
+          <button type="submit" id="btn-login" class="btn btn-primary login-gate-submit">Entrar</button>
+        </form>
+      </div>
+
+      <div id="auth-panel-register" class="auth-panel hidden" data-auth-panel-body="register" hidden>
+        <h1 class="login-gate-title">Criar conta</h1>
+        <p class="login-gate-desc">Escolha utilizador, senha e uma pergunta para recuperar a conta depois.</p>
+        <form id="register-form" autocomplete="off">
+          <p id="register-error" class="modal-error hidden" role="alert"></p>
+          <label class="field-label" for="register-username">Utilizador</label>
+          <input type="text" id="register-username" class="input" autocomplete="username" placeholder="ex.: maria" required minlength="3" maxlength="32" />
+          <label class="field-label" for="register-display">Nome <span class="opt">opcional</span></label>
+          <input type="text" id="register-display" class="input" autocomplete="nickname" placeholder="ex.: Maria" />
+          <label class="field-label" for="register-password">Senha</label>
+          <input type="password" id="register-password" class="input" autocomplete="new-password" placeholder="mín. 6 caracteres" required minlength="6" />
+          <label class="field-label" for="register-password2">Confirmar senha</label>
+          <input type="password" id="register-password2" class="input" autocomplete="new-password" required minlength="6" />
+          <label class="field-label" for="register-security-preset">Pergunta de segurança</label>
+          <select id="register-security-preset" class="input">
+            <option value="">Escolha uma pergunta…</option>
+            <option value="__custom__">Outra (escrever)</option>
+          </select>
+          <input type="text" id="register-security-custom" class="input hidden" maxlength="160" placeholder="Escreva a sua pergunta" hidden />
+          <label class="field-label" for="register-security-answer">Resposta</label>
+          <input type="text" id="register-security-answer" class="input" autocomplete="off" placeholder="resposta secreta" required />
+          <p class="login-gate-hint muted">Guarde a resposta: será necessária para repor a senha.</p>
+          <button type="submit" id="btn-register" class="btn btn-primary login-gate-submit">Criar conta</button>
+        </form>
+      </div>
+
+      <div id="auth-panel-recover" class="auth-panel hidden" data-auth-panel-body="recover" hidden>
+        <h1 class="login-gate-title">Recuperar senha</h1>
+        <p class="login-gate-desc">Use a pergunta de segurança definida no cadastro.</p>
+        <form id="recover-form" autocomplete="off">
+          <p id="recover-error" class="modal-error hidden" role="alert"></p>
+          <p id="recover-ok" class="login-gate-ok hidden" role="status"></p>
+          <label class="field-label" for="recover-username">Utilizador</label>
+          <input type="text" id="recover-username" class="input" autocomplete="username" required />
+          <button type="button" id="btn-recover-lookup" class="btn btn-secondary login-gate-submit">Ver pergunta</button>
+          <div id="recover-step2" class="recover-step2 hidden" hidden>
+            <p id="recover-question" class="login-gate-question"></p>
+            <label class="field-label" for="recover-answer">Resposta</label>
+            <input type="text" id="recover-answer" class="input" autocomplete="off" />
+            <label class="field-label" for="recover-password">Nova senha</label>
+            <input type="password" id="recover-password" class="input" autocomplete="new-password" minlength="6" />
+            <label class="field-label" for="recover-password2">Confirmar nova senha</label>
+            <input type="password" id="recover-password2" class="input" autocomplete="new-password" minlength="6" />
+            <button type="submit" id="btn-recover-submit" class="btn btn-primary login-gate-submit">Guardar nova senha</button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 

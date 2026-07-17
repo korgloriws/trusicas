@@ -49,8 +49,12 @@ from users import (
     create_user,
     delete_user,
     ensure_admin_user,
+    get_recovery_question,
     get_user_by_id,
     list_users,
+    register_user,
+    reset_password_with_security,
+    SECURITY_QUESTION_PRESETS,
     update_user,
     verify_password,
 )
@@ -112,6 +116,94 @@ def create_app() -> Flask:
                 "authenticated": True,
                 "user": user,
                 "is_admin": user.get("role") == "admin",
+            }
+        )
+
+    @app.get("/api/auth/security-presets")
+    def api_security_presets():
+        return jsonify({"ok": True, "presets": list(SECURITY_QUESTION_PRESETS)})
+
+    @app.post("/api/auth/register")
+    def api_auth_register():
+        ensure_admin_user()
+        payload = request.get_json(silent=True) or {}
+        try:
+            user = register_user(
+                username=str(payload.get("username") or ""),
+                display_name=str(payload.get("display_name") or ""),
+                password=str(payload.get("password") or ""),
+                security_question=str(payload.get("security_question") or ""),
+                security_answer=str(payload.get("security_answer") or ""),
+            )
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        login_user(user)
+        return jsonify(
+            {
+                "ok": True,
+                "authenticated": True,
+                "user": user,
+                "is_admin": False,
+                "registered": True,
+            }
+        ), 201
+
+    @app.post("/api/auth/recovery-question")
+    def api_auth_recovery_question():
+        """Devolve a pergunta de segurança (sem revelar se o user não existe)."""
+        payload = request.get_json(silent=True) or {}
+        username = str(payload.get("username") or "")
+        info = get_recovery_question(username)
+        # Resposta uniforme para não enumerar contas
+        if info is None:
+            return jsonify(
+                {
+                    "ok": True,
+                    "found": False,
+                    "configured": False,
+                    "question": None,
+                    "error": "Se a conta existir e tiver recuperação, a pergunta aparece a seguir. "
+                    "Caso contrário, confirme o utilizador ou peça ajuda ao administrador.",
+                }
+            )
+        if not info.get("configured"):
+            return jsonify(
+                {
+                    "ok": True,
+                    "found": True,
+                    "configured": False,
+                    "username": info["username"],
+                    "question": None,
+                    "error": "Esta conta não tem pergunta de segurança. "
+                    "Peça ao administrador para repor a senha.",
+                }
+            )
+        return jsonify(
+            {
+                "ok": True,
+                "found": True,
+                "configured": True,
+                "username": info["username"],
+                "question": info["question"],
+            }
+        )
+
+    @app.post("/api/auth/recover")
+    def api_auth_recover():
+        payload = request.get_json(silent=True) or {}
+        try:
+            user = reset_password_with_security(
+                username=str(payload.get("username") or ""),
+                security_answer=str(payload.get("security_answer") or ""),
+                new_password=str(payload.get("new_password") or ""),
+            )
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        return jsonify(
+            {
+                "ok": True,
+                "username": user["username"],
+                "message": "Senha actualizada. Já pode entrar com a nova senha.",
             }
         )
 

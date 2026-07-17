@@ -74,6 +74,11 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"
         )
+        user_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "security_question" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN security_question TEXT")
+        if "security_answer_hash" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN security_answer_hash TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS lessons (
@@ -1185,6 +1190,13 @@ def restore_db_bytes(data: bytes) -> dict[str, Any]:
                 )
                 """
             )
+            user_cols = {
+                str(r[1]) for r in conn.execute("PRAGMA table_info(users)").fetchall()
+            }
+            if "security_question" not in user_cols:
+                conn.execute("ALTER TABLE users ADD COLUMN security_question TEXT")
+            if "security_answer_hash" not in user_cols:
+                conn.execute("ALTER TABLE users ADD COLUMN security_answer_hash TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS lessons (

@@ -76,6 +76,268 @@ function setLoginError(msg) {
   }
 }
 
+function setAuthPanelError(id, msg) {
+  const el = $(id);
+  if (!el) return;
+  if (msg) {
+    el.textContent = msg;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+let securityPresetsLoaded = false;
+
+async function ensureSecurityPresets() {
+  const sel = $("register-security-preset");
+  if (!sel || securityPresetsLoaded) return;
+  try {
+    const res = await apiFetch("/api/auth/security-presets");
+    const data = await res.json();
+    const presets = data.presets || [];
+    // Keep first empty + last __custom__; insert presets before custom
+    const custom = sel.querySelector('option[value="__custom__"]');
+    for (const p of presets) {
+      const opt = document.createElement("option");
+      opt.value = p;
+      opt.textContent = p;
+      if (custom) sel.insertBefore(opt, custom);
+      else sel.appendChild(opt);
+    }
+    securityPresetsLoaded = true;
+  } catch (_e) {
+    /* ignore — user can still type custom */
+  }
+}
+
+function resolveRegisterSecurityQuestion() {
+  const preset = ($("register-security-preset")?.value || "").trim();
+  if (preset === "__custom__") {
+    return ($("register-security-custom")?.value || "").trim();
+  }
+  return preset;
+}
+
+function syncRegisterSecurityCustom() {
+  const preset = ($("register-security-preset")?.value || "").trim();
+  const custom = $("register-security-custom");
+  if (!custom) return;
+  const show = preset === "__custom__";
+  custom.hidden = !show;
+  custom.classList.toggle("hidden", !show);
+  if (show) custom.required = true;
+  else {
+    custom.required = false;
+    custom.value = "";
+  }
+}
+
+function setAuthPanel(name) {
+  const panels = ["login", "register", "recover"];
+  if (!panels.includes(name)) name = "login";
+  document.querySelectorAll(".login-gate-tab").forEach((btn) => {
+    const on = btn.dataset.authPanel === name;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll("[data-auth-panel-body]").forEach((panel) => {
+    const on = panel.getAttribute("data-auth-panel-body") === name;
+    panel.hidden = !on;
+    panel.classList.toggle("hidden", !on);
+  });
+  setLoginError("");
+  setAuthPanelError("register-error", "");
+  setAuthPanelError("recover-error", "");
+  const ok = $("recover-ok");
+  if (ok) {
+    ok.textContent = "";
+    ok.classList.add("hidden");
+  }
+  if (name === "register") {
+    ensureSecurityPresets();
+    syncRegisterSecurityCustom();
+    setTimeout(() => $("register-username")?.focus(), 40);
+  } else if (name === "recover") {
+    resetRecoverStep2();
+    setTimeout(() => $("recover-username")?.focus(), 40);
+  } else {
+    setTimeout(() => $("login-username")?.focus(), 40);
+  }
+}
+
+function resetRecoverStep2() {
+  const step = $("recover-step2");
+  if (step) {
+    step.hidden = true;
+    step.classList.add("hidden");
+  }
+  const q = $("recover-question");
+  if (q) q.textContent = "";
+  if ($("recover-answer")) $("recover-answer").value = "";
+  if ($("recover-password")) $("recover-password").value = "";
+  if ($("recover-password2")) $("recover-password2").value = "";
+}
+
+function applyAuthSuccess(data, welcomePrefix) {
+  userPlaylists = [];
+  activePlaylistId = null;
+  syncPlaylistSelect();
+  wipeLessonWorkspace({ focusLyrics: false, resetView: true });
+  isLoggedIn = true;
+  isAdmin = Boolean(data.is_admin);
+  currentUser = data.user || null;
+  syncAuthUi();
+  const name = currentUser?.display_name || currentUser?.username || "";
+  showAdminToast((welcomePrefix || "Bem-vindo") + (name ? `, ${name}` : "") + ".");
+  loadLibrary();
+}
+
+async function doRegister(ev) {
+  if (ev) ev.preventDefault();
+  const username = ($("register-username")?.value || "").trim();
+  const display_name = ($("register-display")?.value || "").trim();
+  const password = $("register-password")?.value || "";
+  const password2 = $("register-password2")?.value || "";
+  const security_question = resolveRegisterSecurityQuestion();
+  const security_answer = ($("register-security-answer")?.value || "").trim();
+  setAuthPanelError("register-error", "");
+  if (!username || !password) {
+    setAuthPanelError("register-error", "Preencha utilizador e senha.");
+    return;
+  }
+  if (password !== password2) {
+    setAuthPanelError("register-error", "As senhas não coincidem.");
+    return;
+  }
+  if (!security_question || !security_answer) {
+    setAuthPanelError("register-error", "Indique a pergunta e a resposta de segurança.");
+    return;
+  }
+  const btn = $("btn-register");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await apiFetch("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({
+        username,
+        display_name,
+        password,
+        security_question,
+        security_answer,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setAuthPanelError("register-error", data.error || "Falha ao criar conta.");
+      return;
+    }
+    applyAuthSuccess(data, "Conta criada");
+  } catch (e) {
+    setAuthPanelError("register-error", String(e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function doRecoverLookup() {
+  const username = ($("recover-username")?.value || "").trim();
+  setAuthPanelError("recover-error", "");
+  const ok = $("recover-ok");
+  if (ok) {
+    ok.textContent = "";
+    ok.classList.add("hidden");
+  }
+  resetRecoverStep2();
+  if (!username) {
+    setAuthPanelError("recover-error", "Indique o utilizador.");
+    return;
+  }
+  const btn = $("btn-recover-lookup");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await apiFetch("/api/auth/recovery-question", {
+      method: "POST",
+      body: JSON.stringify({ username }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setAuthPanelError("recover-error", data.error || "Falha ao consultar.");
+      return;
+    }
+    if (!data.configured || !data.question) {
+      setAuthPanelError(
+        "recover-error",
+        data.error || "Não foi possível obter a pergunta de segurança."
+      );
+      return;
+    }
+    if ($("recover-username") && data.username) {
+      $("recover-username").value = data.username;
+    }
+    const q = $("recover-question");
+    if (q) q.textContent = data.question;
+    const step = $("recover-step2");
+    if (step) {
+      step.hidden = false;
+      step.classList.remove("hidden");
+    }
+    setTimeout(() => $("recover-answer")?.focus(), 40);
+  } catch (e) {
+    setAuthPanelError("recover-error", String(e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function doRecover(ev) {
+  if (ev) ev.preventDefault();
+  const username = ($("recover-username")?.value || "").trim();
+  const security_answer = ($("recover-answer")?.value || "").trim();
+  const new_password = $("recover-password")?.value || "";
+  const password2 = $("recover-password2")?.value || "";
+  setAuthPanelError("recover-error", "");
+  const okEl = $("recover-ok");
+  if (okEl) {
+    okEl.textContent = "";
+    okEl.classList.add("hidden");
+  }
+  if (!username || !security_answer || !new_password) {
+    setAuthPanelError("recover-error", "Preencha resposta e nova senha.");
+    return;
+  }
+  if (new_password !== password2) {
+    setAuthPanelError("recover-error", "As senhas não coincidem.");
+    return;
+  }
+  const btn = $("btn-recover-submit");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await apiFetch("/api/auth/recover", {
+      method: "POST",
+      body: JSON.stringify({ username, security_answer, new_password }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setAuthPanelError("recover-error", data.error || "Falha ao recuperar.");
+      return;
+    }
+    if (okEl) {
+      okEl.textContent = data.message || "Senha actualizada.";
+      okEl.classList.remove("hidden");
+    }
+    resetRecoverStep2();
+    if ($("login-username")) $("login-username").value = data.username || username;
+    if ($("login-password")) $("login-password").value = "";
+    setTimeout(() => setAuthPanel("login"), 600);
+  } catch (e) {
+    setAuthPanelError("recover-error", String(e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function setModalError(id, msg) {
   const el = $(id);
   if (!el) return;
@@ -205,17 +467,8 @@ async function doLogin(ev) {
       return;
     }
     // Limpa qualquer música/estudo do utilizador anterior antes de mostrar a conta nova
-    userPlaylists = [];
-    activePlaylistId = null;
-    syncPlaylistSelect();
-    wipeLessonWorkspace({ focusLyrics: false, resetView: true });
-    isLoggedIn = true;
-    isAdmin = Boolean(data.is_admin);
-    currentUser = data.user || null;
+    applyAuthSuccess(data, "Bem-vindo");
     if ($("login-password")) $("login-password").value = "";
-    syncAuthUi();
-    showAdminToast("Bem-vindo" + (currentUser?.display_name ? `, ${currentUser.display_name}` : "") + ".");
-    loadLibrary();
   } catch (e) {
     setLoginError(String(e));
   } finally {
@@ -240,6 +493,7 @@ async function doLogout() {
   const toast = $("admin-toast");
   if (toast) toast.classList.add("hidden");
   if (adminToastTimer) clearTimeout(adminToastTimer);
+  setAuthPanel("login");
   setTimeout(() => $("login-username")?.focus(), 50);
 }
 
@@ -2499,6 +2753,13 @@ document.querySelectorAll(".theme-choice").forEach((btn) => {
 syncThemeUi();
 
 $("login-form")?.addEventListener("submit", (ev) => doLogin(ev));
+$("register-form")?.addEventListener("submit", (ev) => doRegister(ev));
+$("recover-form")?.addEventListener("submit", (ev) => doRecover(ev));
+$("btn-recover-lookup")?.addEventListener("click", () => doRecoverLookup());
+$("register-security-preset")?.addEventListener("change", () => syncRegisterSecurityCustom());
+document.querySelectorAll(".login-gate-tab").forEach((btn) => {
+  btn.addEventListener("click", () => setAuthPanel(btn.dataset.authPanel || "login"));
+});
 $("btn-admin-logout")?.addEventListener("click", () => doLogout());
 $("btn-open-settings")?.addEventListener("click", () => openSettingsModal());
 $("settings-form")?.addEventListener("submit", (ev) => saveSettings(ev));
