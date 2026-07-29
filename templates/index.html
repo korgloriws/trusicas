@@ -2,6 +2,8 @@
 <html lang="pt-BR" data-theme="dark">
 <head>
   <meta charset="utf-8" />
+  <!-- YouTube embeds exigem Referer; sem isto muitos vídeos mostram «Video unavailable». -->
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
   <script>
     (function () {
       try {
@@ -22,7 +24,7 @@
   <link rel="icon" href="{{ url_for('static', filename='image/trusicas-logo.png') }}" type="image/png" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
-<body class="auth-pending">
+<body class="auth-pending"{% if share_token %} data-share-token="{{ share_token }}"{% endif %}>
   <div id="login-gate" class="login-gate hidden" hidden>
     <div class="login-gate-card">
       <img
@@ -146,6 +148,7 @@
         <div class="hero-toolbar">
           <nav class="segmented" aria-label="Navegação principal">
             <button type="button" class="segmented-btn active" data-view="create">Nova lição</button>
+            <button type="button" class="segmented-btn" data-view="study">Aula</button>
             <button type="button" class="segmented-btn" data-view="library">Biblioteca</button>
           </nav>
           <div class="segmented theme-bar" role="group" aria-label="Tema da interface">
@@ -173,13 +176,6 @@
         <div id="edit-mode-banner" class="edit-mode-banner hidden" role="status">
           <p id="edit-mode-banner-text" class="edit-mode-banner-text"></p>
           <button type="button" id="btn-cancel-edit" class="btn btn-sm btn-secondary">Cancelar edição</button>
-        </div>
-        <div id="training-mode-banner" class="training-mode-banner hidden" role="status">
-          <p id="training-mode-banner-text" class="training-mode-banner-text"></p>
-          <div class="training-mode-actions">
-            <button type="button" id="btn-another-random" class="btn btn-sm btn-primary">Outra faixa</button>
-            <button type="button" id="btn-exit-training" class="btn btn-sm btn-secondary">Sair do treino</button>
-          </div>
         </div>
 
         <div class="lyrics-intake">
@@ -245,6 +241,18 @@
             <p id="generate-loading-elapsed" class="generate-loading-elapsed"></p>
           </div>
         </div>
+
+        <div id="generate-done" class="generate-done hidden" role="status" aria-live="polite" hidden>
+          <div class="generate-done-inner">
+            <p class="generate-done-kicker">Pronto</p>
+            <h3 id="generate-done-title" class="generate-done-title">Lição concluída</h3>
+            <p id="generate-done-desc" class="generate-done-desc"></p>
+            <div class="generate-done-actions">
+              <button type="button" id="btn-go-to-lesson" class="btn btn-primary">Ir para a aula</button>
+              <button type="button" id="btn-generate-another" class="btn btn-secondary">Nova lição</button>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section id="error-panel" class="surface surface-alert hidden">
@@ -256,6 +264,79 @@
           <summary>Resposta bruta do modelo (debug)</summary>
           <pre id="error-raw" class="code-block"></pre>
         </details>
+      </section>
+    </div>
+
+    <div id="view-study" class="hidden">
+      <section class="surface study-surface">
+        <div class="study-head">
+          <div class="study-head-copy">
+            <p class="study-kicker">Aula</p>
+            <h2 id="study-song-title" class="surface-title">Nenhuma aula aberta</h2>
+            <p id="study-song-meta" class="surface-desc">Abra uma música na Biblioteca ou gere uma nova lição.</p>
+          </div>
+          <div class="study-head-actions">
+            <label class="study-progress-field">
+              <span class="study-progress-label">Progresso</span>
+              <select id="study-progress" class="input study-progress-select" disabled aria-label="Estado de progresso da música">
+                <option value="aprender">Aprender</option>
+                <option value="aprendendo">Aprendendo</option>
+                <option value="ja_sei">Já sei</option>
+              </select>
+            </label>
+            <button type="button" id="btn-study-share" class="btn btn-secondary btn-sm hidden">Partilhar</button>
+            <button type="button" id="btn-study-edit" class="btn btn-secondary btn-sm hidden">Editar</button>
+            <button type="button" id="btn-study-new-lesson" class="btn btn-secondary btn-sm">Nova lição</button>
+            <button type="button" id="btn-study-library" class="btn btn-secondary btn-sm">Biblioteca</button>
+          </div>
+        </div>
+        <div id="share-mode-banner" class="share-mode-banner hidden" role="status">
+          <div class="share-mode-banner-copy">
+            <p class="share-mode-banner-title">Só leitura · Estuda esta música comigo</p>
+            <p class="share-mode-banner-desc">Partilha pública do Trusicas. Crie a sua conta para guardar e treinar as suas próprias músicas.</p>
+          </div>
+          <a href="/" class="btn btn-primary btn-sm" id="share-mode-cta">Criar conta</a>
+        </div>
+        <div id="training-mode-banner" class="training-mode-banner hidden" role="status">
+          <p id="training-mode-banner-text" class="training-mode-banner-text"></p>
+          <div class="training-mode-actions">
+            <button type="button" id="btn-another-random" class="btn btn-sm btn-primary">Outra faixa</button>
+            <button type="button" id="btn-exit-training" class="btn btn-sm btn-secondary">Sair do treino</button>
+          </div>
+        </div>
+        <p id="study-status" class="pill-status pill-status-block" aria-live="polite"></p>
+      </section>
+
+      <section id="study-youtube" class="surface youtube-surface hidden" aria-label="Áudio da música">
+        <div class="youtube-head">
+          <div class="youtube-head-copy">
+            <h3 class="youtube-title">Áudio da música</h3>
+            <p class="youtube-desc">Ouve na própria aula e acompanha a tradução. Pausa ou salta para o trecho difícil na barra do player.</p>
+          </div>
+          <div class="youtube-head-actions">
+            <button type="button" id="btn-youtube-search" class="btn btn-secondary btn-sm">Buscar áudio</button>
+            <button type="button" id="btn-youtube-toggle-url" class="btn btn-secondary btn-sm hidden">Colar link</button>
+          </div>
+        </div>
+        <div id="youtube-player-shell" class="youtube-player-shell hidden">
+          <div class="youtube-audio-frame">
+            <div id="youtube-player"></div>
+          </div>
+          <p id="youtube-track-label" class="youtube-track-label muted"></p>
+        </div>
+        <div id="youtube-url-row" class="youtube-url-row hidden">
+          <label class="visually-hidden" for="youtube-url-input">Link do YouTube</label>
+          <input
+            type="url"
+            id="youtube-url-input"
+            class="input"
+            placeholder="https://www.youtube.com/watch?v=…"
+            autocomplete="off"
+          />
+          <button type="button" id="btn-youtube-apply-url" class="btn btn-primary btn-sm">Usar link</button>
+        </div>
+        <div id="youtube-candidates" class="youtube-candidates hidden" role="list"></div>
+        <p id="youtube-status" class="pill-status pill-status-block" aria-live="polite"></p>
       </section>
 
       <section id="result" class="hidden">
@@ -288,7 +369,7 @@
         <div class="library-head">
           <div>
             <h2 class="surface-title">Biblioteca</h2>
-            <p class="surface-desc">Organize músicas em listas, abra uma lição ou use o treino aleatório na lista actual.</p>
+            <p class="surface-desc">Organize músicas em listas, acompanhe o progresso (Aprender → Aprendendo → Já sei) e use o treino aleatório.</p>
           </div>
           <div class="library-head-controls">
             <label class="visually-hidden" for="library-search">Buscar na biblioteca</label>
@@ -325,17 +406,30 @@
             </div>
           </div>
         </section>
+        <section class="progress-filter-bar" aria-label="Filtrar por progresso">
+          <p class="progress-filter-label">Progresso</p>
+          <div class="progress-filter-chips" role="group" aria-label="Estado de estudo">
+            <button type="button" class="progress-filter-chip active" data-progress-filter="">Todas</button>
+            <button type="button" class="progress-filter-chip" data-progress-filter="aprender">Aprender</button>
+            <button type="button" class="progress-filter-chip" data-progress-filter="aprendendo">Aprendendo</button>
+            <button type="button" class="progress-filter-chip" data-progress-filter="ja_sei">Já sei</button>
+          </div>
+        </section>
         <div id="library-status" class="pill-status pill-status-block" aria-live="polite"></div>
         <section class="train-panel" aria-label="Treino aleatório">
           <div class="train-panel-copy">
             <h3 class="train-panel-title">Treino aleatório</h3>
-            <p class="train-panel-desc">A roleta percorre as faixas da lista seleccionada e para numa música para você treinar vocabulário, estruturas e exemplos.</p>
+            <p class="train-panel-desc">A roleta percorre as faixas da lista seleccionada (Aprender e Aprendendo) e para numa música para você treinar vocabulário, estruturas e exemplos.</p>
           </div>
           <div class="train-panel-action">
             <button type="button" id="btn-random-train" class="btn btn-primary btn-train-spin">
               <span class="btn-train-ico" aria-hidden="true">🎲</span>
               Sortear faixa
             </button>
+            <label class="train-include-known">
+              <input type="checkbox" id="train-include-known" />
+              Incluir «Já sei»
+            </label>
             <p id="train-pool-hint" class="train-pool-hint muted"></p>
           </div>
         </section>
@@ -496,6 +590,30 @@
         <div id="lesson-lists-options" class="lesson-lists-options" role="list"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-lesson-lists-modal>Fechar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="share-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="share-modal-title" hidden>
+    <button type="button" class="modal-backdrop" data-close-share-modal aria-label="Fechar"></button>
+    <div class="modal-panel" role="document">
+      <header class="modal-head">
+        <h2 id="share-modal-title" class="modal-title">Partilhar lição</h2>
+        <button type="button" class="modal-close" data-close-share-modal aria-label="Fechar">Fechar</button>
+      </header>
+      <div class="modal-body">
+        <p class="modal-desc">Quem tiver o link pode estudar esta música em modo só de leitura — sem editar a sua biblioteca.</p>
+        <p id="share-modal-error" class="modal-error hidden" role="alert"></p>
+        <label class="field-label" for="share-url-input">Link</label>
+        <div class="share-url-row">
+          <input type="text" id="share-url-input" class="input" readonly autocomplete="off" />
+          <button type="button" id="btn-share-copy" class="btn btn-primary">Copiar</button>
+        </div>
+        <p id="share-modal-hint" class="muted share-modal-hint"></p>
+        <div class="modal-actions share-modal-actions">
+          <button type="button" id="btn-share-revoke" class="btn btn-ghost-danger">Desactivar link</button>
+          <button type="button" class="btn btn-secondary" data-close-share-modal>Fechar</button>
         </div>
       </div>
     </div>

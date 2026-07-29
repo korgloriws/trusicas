@@ -14,6 +14,13 @@ function esc(s) {
 let editingLessonId = null;
 /** Lição atualmente aberta (ver / treino / edição) — para guardar cifra sem entrar em edição. */
 let activeLessonId = null;
+/** Letra da aula aberta (não depende do formulário «Nova lição»). */
+let activeLessonLyrics = "";
+/** Metadados da aula aberta para busca de cifra / cabeçalho. */
+let studyTitle = "";
+let studyArtist = "";
+/** Vista actual: create | study | library */
+let currentView = "create";
 /** Deep copy of the lesson last shown — merge base for save; used on cancel to re-render. */
 let lastLoadedLessonSnapshot = null;
 /** Opened via random training spin. */
@@ -24,11 +31,67 @@ let libraryTrainingPool = [];
 let userPlaylists = [];
 /** Selected playlist id, or null for «Todas as músicas». */
 let activePlaylistId = null;
+/** Filtro de progresso na biblioteca: '' | aprender | aprendendo | ja_sei */
+let libraryProgressFilter = "";
+/** Progresso da aula aberta. */
+let studyProgress = "aprender";
+/** YouTube video id da aula aberta. */
+let studyYoutubeId = null;
+/** Título do vídeo YouTube. */
+let studyYoutubeTitle = "";
+/** Lista de candidatos da última busca (para trocar se o embed falhar). */
+let studyYoutubeCandidates = [];
+
+const PROGRESS_LABELS = {
+  aprender: "Aprender",
+  aprendendo: "Aprendendo",
+  ja_sei: "Já sei",
+};
+
+function normalizeProgressClient(value) {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (raw === "aprender" || raw === "aprendendo" || raw === "ja_sei") return raw;
+  return "aprender";
+}
+
+function progressLabel(value) {
+  const key = normalizeProgressClient(value);
+  return PROGRESS_LABELS[key] || PROGRESS_LABELS.aprender;
+}
+
+function progressSelectHtml(lessonId, current) {
+  const cur = normalizeProgressClient(current);
+  const opts = ["aprender", "aprendendo", "ja_sei"]
+    .map((v) => {
+      const sel = v === cur ? " selected" : "";
+      return `<option value="${v}"${sel}>${PROGRESS_LABELS[v]}</option>`;
+    })
+    .join("");
+  return `<label class="library-progress-wrap" title="Estado de estudo">
+    <span class="visually-hidden">Progresso</span>
+    <select class="input library-progress-select" data-lesson-id="${esc(String(lessonId))}" aria-label="Progresso da música">${opts}</select>
+  </label>`;
+}
 
 let isLoggedIn = false;
 let isAdmin = false;
 /** @type {{ id: number, username: string, display_name: string, role: string } | null} */
 let currentUser = null;
+/** Modo link público /s/<token> — só leitura, sem login. */
+let shareMode = false;
+let shareToken = null;
+/** Token de partilha da lição aberta (dono). */
+let activeLessonShareToken = null;
+
+function detectShareMode() {
+  const fromPath = (window.location.pathname || "").match(/^\/s\/([A-Za-z0-9_-]+)/);
+  if (fromPath) return fromPath[1];
+  const fromBody = document.body?.getAttribute("data-share-token");
+  return fromBody && String(fromBody).trim() ? String(fromBody).trim() : null;
+}
 
 function apiFetch(url, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -51,6 +114,13 @@ async function refreshAuth() {
     isAdmin = false;
     currentUser = null;
   }
+
+  if (shareMode) {
+    syncAuthUi();
+    await loadSharedLesson(shareToken);
+    return;
+  }
+
   const nextUserId = currentUser?.id ?? null;
   if (previousUserId !== nextUserId) {
     userPlaylists = [];
@@ -391,29 +461,36 @@ function syncAuthUi() {
   document.body.classList.remove("auth-pending");
   document.body.classList.toggle("is-admin", isAdmin);
   document.body.classList.toggle("is-logged-in", isLoggedIn);
+  document.body.classList.toggle("share-mode", shareMode);
 
   const gate = $("login-gate");
   const shell = $("app-shell");
   const header = $("site-header");
+  const showApp = isLoggedIn || shareMode;
   if (gate) {
-    gate.hidden = isLoggedIn;
-    gate.classList.toggle("hidden", isLoggedIn);
+    gate.hidden = showApp;
+    gate.classList.toggle("hidden", showApp);
   }
   if (shell) {
-    shell.hidden = !isLoggedIn;
-    shell.classList.toggle("hidden", !isLoggedIn);
+    shell.hidden = !showApp;
+    shell.classList.toggle("hidden", !showApp);
   }
   if (header) {
-    header.hidden = !isLoggedIn;
-    header.classList.toggle("hidden", !isLoggedIn);
+    header.hidden = !showApp;
+    header.classList.toggle("hidden", !showApp);
+  }
+
+  const shareBanner = $("share-mode-banner");
+  if (shareBanner) {
+    shareBanner.classList.toggle("hidden", !shareMode);
   }
 
   const userWrap = $("admin-auth-user");
   const bar = $("admin-active-bar");
   const pill = $("user-display-pill");
   const usersBtn = $("btn-open-users");
-  if (userWrap) userWrap.classList.toggle("hidden", !isLoggedIn);
-  if (bar) bar.classList.toggle("hidden", !isAdmin);
+  if (userWrap) userWrap.classList.toggle("hidden", !isLoggedIn || shareMode);
+  if (bar) bar.classList.toggle("hidden", !isAdmin || shareMode);
   if (pill) {
     if (currentUser) {
       pill.textContent = currentUser.display_name || currentUser.username;
@@ -423,9 +500,10 @@ function syncAuthUi() {
       pill.title = "";
     }
   }
-  if (usersBtn) usersBtn.classList.toggle("hidden", !isAdmin);
+  if (usersBtn) usersBtn.classList.toggle("hidden", !isAdmin || shareMode);
+  syncStudyHeader();
 
-  const ro = !isLoggedIn;
+  const ro = !isLoggedIn || shareMode;
   for (const id of ["lyrics", "title", "artist", "cifra"]) {
     const el = $(id);
     if (el) el.readOnly = ro;
@@ -433,13 +511,13 @@ function syncAuthUi() {
 
   const gen = $("btn-generate");
   const newLesson = $("btn-new-lesson");
-  if (gen) gen.disabled = !isLoggedIn;
-  if (newLesson) newLesson.disabled = !isLoggedIn;
+  if (gen) gen.disabled = !isLoggedIn || shareMode;
+  if (newLesson) newLesson.disabled = !isLoggedIn || shareMode;
 
   const backupPanel = $("library-backup-panel");
-  if (backupPanel) backupPanel.classList.toggle("hidden", !isAdmin);
+  if (backupPanel) backupPanel.classList.toggle("hidden", !isAdmin || shareMode);
 
-  if (!isLoggedIn) {
+  if (!isLoggedIn && !shareMode) {
     wipeLessonWorkspace({ focusLyrics: false, resetView: false });
   }
   syncEditToolbar();
@@ -686,7 +764,14 @@ function clearEditingMode() {
 
 function clearActiveLesson() {
   activeLessonId = null;
+  activeLessonLyrics = "";
+  studyTitle = "";
+  studyArtist = "";
+  studyProgress = "aprender";
+  activeLessonShareToken = null;
+  destroyYoutubePlayer();
   clearEditingMode();
+  syncStudyHeader();
 }
 
 function clearResultPanels() {
@@ -711,14 +796,53 @@ function clearResultPanels() {
   $("error-panel")?.classList.add("hidden");
 }
 
-/** Limpa formulário, resultado, treino e estados — evita vazamento entre utilizadores. */
-function wipeLessonWorkspace({ focusLyrics = false, resetView = false } = {}) {
-  stopGenerateTicker();
-  setGenerateLoading(false);
-  clearActiveLesson();
-  clearTrainingMode();
-  clearResultPanels();
+function syncStudyHeader() {
+  const titleEl = $("study-song-title");
+  const metaEl = $("study-song-meta");
+  const editBtn = $("btn-study-edit");
+  const shareBtn = $("btn-study-share");
+  const progressEl = $("study-progress");
+  if (activeLessonId == null) {
+    if (titleEl) titleEl.textContent = "Nenhuma aula aberta";
+    if (metaEl) {
+      metaEl.textContent = shareMode
+        ? "Link de partilha inválido ou a carregar…"
+        : "Abra uma música na Biblioteca ou gere uma nova lição.";
+    }
+    if (editBtn) editBtn.classList.add("hidden");
+    if (shareBtn) shareBtn.classList.add("hidden");
+    if (progressEl) {
+      progressEl.value = "aprender";
+      progressEl.disabled = true;
+    }
+    return;
+  }
+  const title = studyTitle || "Sem título";
+  const artist = studyArtist || "";
+  if (titleEl) titleEl.textContent = title;
+  if (metaEl) {
+    if (shareMode) {
+      metaEl.textContent = artist
+        ? `${artist} · partilha só de leitura`
+        : "Partilha só de leitura";
+    } else {
+      const prog = progressLabel(studyProgress);
+      metaEl.textContent = artist
+        ? `${artist} · ${prog} · lição #${activeLessonId}`
+        : `${prog} · lição #${activeLessonId}`;
+    }
+  }
+  if (editBtn) editBtn.classList.toggle("hidden", !isLoggedIn || shareMode);
+  if (shareBtn) {
+    shareBtn.classList.toggle("hidden", !isLoggedIn || shareMode || activeLessonId == null);
+  }
+  if (progressEl) {
+    progressEl.value = normalizeProgressClient(studyProgress);
+    progressEl.disabled = !isLoggedIn || shareMode;
+  }
+}
 
+function clearCreateFormFields() {
   const lyricsEl = $("lyrics");
   const titleEl = $("title");
   const artistEl = $("artist");
@@ -727,15 +851,46 @@ function wipeLessonWorkspace({ focusLyrics = false, resetView = false } = {}) {
   if (titleEl) titleEl.value = "";
   if (artistEl) artistEl.value = "";
   if (cifraEl) cifraEl.value = "";
-
   const fetchSt = $("lyrics-fetch-status");
   if (fetchSt) fetchSt.textContent = "";
   const cifraSt = $("cifra-fetch-status");
   if (cifraSt) cifraSt.textContent = "";
+  setLyricsInputMode("paste");
+}
+
+/** Limpa só a área de criação e vai para «Nova lição». */
+function goToCreateFresh({ focusLyrics = true, message = "" } = {}) {
+  hideGenerateDone();
+  stopGenerateTicker();
+  setGenerateLoading(false);
+  clearEditingMode();
+  clearTrainingMode();
+  clearCreateFormFields();
+  $("error-panel")?.classList.add("hidden");
+  const status = $("status");
+  if (status) status.textContent = message || "";
+  const studySt = $("study-status");
+  if (studySt) studySt.textContent = "";
+  setView("create");
+  if (focusLyrics && isLoggedIn) {
+    setTimeout(() => $("lyrics")?.focus(), 50);
+  }
+}
+
+/** Limpa formulário, resultado, treino e estados — evita vazamento entre utilizadores. */
+function wipeLessonWorkspace({ focusLyrics = false, resetView = false } = {}) {
+  stopGenerateTicker();
+  setGenerateLoading(false);
+  hideGenerateDone();
+  clearActiveLesson();
+  clearTrainingMode();
+  clearResultPanels();
+  clearCreateFormFields();
+
   const status = $("status");
   if (status) status.textContent = "";
-
-  setLyricsInputMode("paste");
+  const studySt = $("study-status");
+  if (studySt) studySt.textContent = "";
 
   const tbody = $("library-tbody");
   if (tbody) tbody.innerHTML = "";
@@ -744,11 +899,19 @@ function wipeLessonWorkspace({ focusLyrics = false, resetView = false } = {}) {
   const libSearch = $("library-search");
   if (libSearch) libSearch.value = "";
   libraryTrainingPool = [];
+  libraryProgressFilter = "";
+  studyProgress = "aprender";
+  document.querySelectorAll(".progress-filter-chip").forEach((btn) => {
+    btn.classList.toggle("active", (btn.getAttribute("data-progress-filter") || "") === "");
+  });
+  const includeKnown = $("train-include-known");
+  if (includeKnown) includeKnown.checked = false;
   syncTrainPoolHint();
+  syncStudyHeader();
 
   if (resetView) setView("create");
-  if (focusLyrics && lyricsEl && isLoggedIn) {
-    setTimeout(() => lyricsEl.focus(), 50);
+  if (focusLyrics && isLoggedIn) {
+    setTimeout(() => $("lyrics")?.focus(), 50);
   }
 }
 
@@ -862,8 +1025,8 @@ async function fetchCifraFromWeb() {
     if (st0) st0.textContent = "Entre na sua conta para buscar.";
     return;
   }
-  const title = ($("title")?.value || "").trim();
-  const artist = ($("artist")?.value || "").trim();
+  const title = ($("title")?.value || "").trim() || studyTitle;
+  const artist = ($("artist")?.value || "").trim() || studyArtist;
   const st = $("cifra-fetch-status");
   const btn = $("btn-fetch-cifra");
   if (!title || !artist) {
@@ -918,35 +1081,86 @@ async function fetchCifraFromWeb() {
   }
 }
 
-function startNextLessonAfterGenerate(
-  saved,
-  { title = "", artist = "", elapsedMs = null, statusOverride = null, modelUsed = null } = {}
-) {
+/** Lesson id waiting behind the «Ir para a aula» confirmation. */
+let pendingLessonId = null;
+
+function hideGenerateDone() {
+  pendingLessonId = null;
+  const panel = $("generate-done");
+  if (!panel) return;
+  panel.classList.add("hidden");
+  panel.hidden = true;
+}
+
+function showGenerateDone(saved, opts = {}) {
+  const {
+    title = "",
+    artist = "",
+    elapsedMs = null,
+    statusOverride = null,
+    fromCache = false,
+  } = opts;
+  const lessonId = saved && saved.id != null ? Number(saved.id) : null;
+  if (lessonId == null || !Number.isFinite(lessonId)) {
+    wipeLessonWorkspace({ focusLyrics: true, resetView: true });
+    return;
+  }
+
+  pendingLessonId = lessonId;
+  ensureLessonInActivePlaylist(lessonId).then(() => loadPlaylists());
+
   const titleHint = String(title).trim() || "Sem título";
   const artistHint = String(artist).trim();
-  const lessonId = saved && saved.id != null ? saved.id : null;
-  // Limpa busca + tradução após concluir (a lição fica na biblioteca)
-  wipeLessonWorkspace({ focusLyrics: true, resetView: true });
-  if (lessonId != null) {
-    ensureLessonInActivePlaylist(lessonId).then(() => loadPlaylists());
-  }
+  const label = artistHint ? `${artistHint} — ${titleHint}` : titleHint;
+
+  const titleEl = $("generate-done-title");
+  const descEl = $("generate-done-desc");
+  const panel = $("generate-done");
   const status = $("status");
-  if (statusOverride) {
-    if (status) status.textContent = statusOverride;
-  } else {
-    const timeBit =
-      elapsedMs != null && elapsedMs > 0 ? ` · gerada em ${formatDurationShort(elapsedMs)}` : "";
-    const modelBit = modelUsed ? ` · ${modelUsed}` : "";
-    if (saved && saved.id != null) {
-      const label = artistHint ? `${artistHint} — ${titleHint}` : titleHint;
-      if (status) {
-        status.textContent = `«${label}» guardada (#${saved.id})${timeBit}${modelBit}. Cole a próxima letra acima.`;
-      }
-    } else if (status) {
-      status.textContent = `Pronto${timeBit}${modelBit}. Cole a próxima letra acima.`;
-    }
+
+  if (titleEl) {
+    titleEl.textContent = fromCache ? "Lição pronta (já existia)" : "Lição concluída";
   }
-  $("create-form-surface")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const bits = [];
+  bits.push(`«${label}»`);
+  if (elapsedMs != null && elapsedMs > 0 && !fromCache) {
+    bits.push(`gerada em ${formatDurationShort(elapsedMs)}`);
+  }
+  if (descEl) {
+    descEl.textContent = statusOverride
+      ? `${statusOverride} Toque em «Ir para a aula» para estudar.`
+      : `${bits.join(" · ")}. Toque em «Ir para a aula» para estudar.`;
+  }
+  if (status) {
+    status.textContent = statusOverride || `Lição #${lessonId} guardada.`;
+  }
+
+  setGenerateLoading(false);
+  if (panel) {
+    panel.classList.remove("hidden");
+    panel.hidden = false;
+  }
+  setView("create");
+  panel?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function goToPendingLesson() {
+  const id = pendingLessonId;
+  if (id == null) return;
+  hideGenerateDone();
+  openLesson(id);
+}
+
+function startAnotherLessonAfterGenerate() {
+  goToCreateFresh({
+    focusLyrics: true,
+    message: "Formulário limpo — cole a próxima letra.",
+  });
+}
+
+/** @deprecated use showGenerateDone — kept name for call sites */
+function startNextLessonAfterGenerate(saved, opts = {}) {
+  showGenerateDone(saved, opts);
 }
 
 function formatTrainLabel(entry) {
@@ -995,6 +1209,10 @@ async function refreshTrainingPool() {
   try {
     const params = new URLSearchParams({ flat: "1", limit: "2000" });
     if (activePlaylistId != null) params.set("playlist_id", String(activePlaylistId));
+    const includeKnown = Boolean($("train-include-known")?.checked);
+    if (!includeKnown) {
+      params.set("progress", "aprender,aprendendo");
+    }
     const res = await apiFetch("/api/lessons?" + params.toString());
     const data = await res.json();
     if (!res.ok || !data.ok) return [];
@@ -1015,17 +1233,23 @@ function syncTrainPoolHint() {
     activePlaylistId == null
       ? "biblioteca"
       : userPlaylists.find((p) => p.id === activePlaylistId)?.name || "lista";
+  const includeKnown = Boolean($("train-include-known")?.checked);
+  const scope = includeKnown ? "todas as faixas" : "Aprender + Aprendendo";
   if (n === 0) {
     hint.textContent =
       activePlaylistId == null
-        ? "Adicione lições à biblioteca para treinar."
-        : "Esta lista está vazia — adicione ou migre músicas.";
+        ? includeKnown
+          ? "Adicione lições à biblioteca para treinar."
+          : "Nenhuma faixa em Aprender/Aprendendo. Marque «Incluir Já sei» ou abra músicas para estudar."
+        : includeKnown
+          ? "Esta lista está vazia — adicione ou migre músicas."
+          : "Nada a treinar nesta lista (só «Já sei» ou vazia).";
     if (btn) btn.disabled = true;
   } else if (n === 1) {
-    hint.textContent = `1 faixa em «${listLabel}».`;
+    hint.textContent = `1 faixa · ${scope} («${listLabel}»).`;
     if (btn) btn.disabled = false;
   } else {
-    hint.textContent = `${n} faixas na roleta («${listLabel}»).`;
+    hint.textContent = `${n} faixas na roleta · ${scope} («${listLabel}»).`;
     if (btn) btn.disabled = false;
   }
 }
@@ -1187,6 +1411,7 @@ function setGenerateLoading(on, { updating = false } = {}) {
     return;
   }
 
+  hideGenerateDone();
   generateStartedAt = Date.now();
   generateAvgMs = averageGenDurationMs();
   if (title) {
@@ -1212,25 +1437,60 @@ function setGenerateLoading(on, { updating = false } = {}) {
   panel?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-function setView(name) {
+function setView(name, { freshCreate = false } = {}) {
+  if (name !== "create" && name !== "study" && name !== "library") name = "create";
+
+  if (name === "create" && freshCreate) {
+    clearEditingMode();
+    clearTrainingMode();
+    clearCreateFormFields();
+    hideGenerateDone();
+    setGenerateLoading(false);
+    $("error-panel")?.classList.add("hidden");
+    const status = $("status");
+    if (status) status.textContent = "";
+  }
+
+  currentView = name;
   const create = $("view-create");
+  const study = $("view-study");
   const lib = $("view-library");
   document.querySelectorAll(".segmented-btn[data-view]").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === name);
   });
+
+  // Em edição: formulário (create) + conteúdo (study) juntos.
+  const editing = editingLessonId != null;
+  const showCreate = name === "create" || (name === "study" && editing);
+  const showStudy = name === "study" || (name === "create" && editing);
+  const showLib = name === "library";
+
+  if (create) {
+    create.classList.toggle("hidden", !showCreate);
+    create.hidden = !showCreate;
+  }
+  if (study) {
+    study.classList.toggle("hidden", !showStudy);
+    study.hidden = !showStudy;
+  }
+  if (lib) {
+    lib.classList.toggle("hidden", !showLib);
+    lib.hidden = !showLib;
+  }
+
   if (name === "library") {
-    create.classList.add("hidden");
-    lib.classList.remove("hidden");
     loadLibrary();
     if (!libraryTrainingPool.length) refreshTrainingPool().then(() => syncTrainPoolHint());
-  } else {
-    lib.classList.add("hidden");
-    create.classList.remove("hidden");
   }
+  if (name === "study" || (name === "create" && editing)) syncStudyHeader();
 }
 
 document.querySelectorAll(".segmented-btn[data-view]").forEach((b) => {
-  b.addEventListener("click", () => setView(b.dataset.view));
+  b.addEventListener("click", () => {
+    const view = b.dataset.view;
+    if (view === "create") setView("create", { freshCreate: true });
+    else setView(view);
+  });
 });
 
 function normalizeLyricsNewlines(text) {
@@ -1314,6 +1574,9 @@ function lyricsEnForLesson(lesson) {
   const raw = $("lyrics")?.value;
   if (raw != null && String(raw).trim()) {
     return normalizeLyricsNewlines(raw).trimEnd();
+  }
+  if (activeLessonLyrics && String(activeLessonLyrics).trim()) {
+    return normalizeLyricsNewlines(activeLessonLyrics).trimEnd();
   }
   const lines = Array.isArray(lesson?.translation?.line_by_line) ? lesson.translation.line_by_line : [];
   return lines
@@ -2212,6 +2475,7 @@ async function loadLibrary() {
     const params = new URLSearchParams({ limit: "200" });
     if (q) params.set("q", q);
     if (activePlaylistId != null) params.set("playlist_id", String(activePlaylistId));
+    if (libraryProgressFilter) params.set("progress", libraryProgressFilter);
     const res = await apiFetch("/api/lessons?" + params.toString());
     const data = await res.json();
     if (!res.ok || !data.ok) {
@@ -2229,6 +2493,8 @@ async function loadLibrary() {
       let emptyMsg;
       if (query) {
         emptyMsg = `Nenhum resultado para «${esc(query)}».`;
+      } else if (libraryProgressFilter) {
+        emptyMsg = `Nenhuma música em «${esc(progressLabel(libraryProgressFilter))}».`;
       } else if (listName) {
         emptyMsg = `A lista «${esc(listName)}» está vazia. Em «Todas as músicas», use o menu Lista para adicionar faixas.`;
       } else {
@@ -2236,7 +2502,7 @@ async function loadLibrary() {
       }
       tbody.innerHTML = `<tr><td colspan="3" class="muted">${emptyMsg}</td></tr>`;
       st.textContent = "";
-      libraryTrainingPool = [];
+      await refreshTrainingPool();
       syncTrainPoolHint();
       return;
     }
@@ -2244,21 +2510,30 @@ async function loadLibrary() {
       const tr = document.createElement("tr");
       tr.className = "library-lesson-row";
       tr.dataset.id = String(r.id);
+      tr.dataset.progress = normalizeProgressClient(r.progress);
       const title = r.title_hint && String(r.title_hint).trim() ? r.title_hint : "Sem título";
       const meta = formatLibraryDate(r.created_at);
       const songLabel = r.artist_hint
         ? `${String(r.artist_hint).trim()} — ${title}`
         : title;
       const adminActions = isLoggedIn ? playlistRowActionsHtml(r.id) : "";
+      const progressCtrl = isLoggedIn ? progressSelectHtml(r.id, r.progress) : "";
       tr.innerHTML = `
         <td class="library-music-cell">
           <div class="library-music-title">${esc(title)}</div>
           <div class="library-music-meta">${esc(meta)}</div>
+          ${progressCtrl}
         </td>
         <td class="library-preview-cell">${esc(r.lyrics_preview || "")}</td>
         <td class="cell-actions library-cell-actions">${adminActions}</td>`;
       tr.addEventListener("click", (ev) => {
-        if (ev.target.closest(".btn-del") || ev.target.closest(".btn-edit") || ev.target.closest(".btn-lesson-lists")) {
+        if (
+          ev.target.closest(".btn-del") ||
+          ev.target.closest(".btn-edit") ||
+          ev.target.closest(".btn-lesson-lists") ||
+          ev.target.closest(".library-progress-select") ||
+          ev.target.closest(".library-progress-wrap")
+        ) {
           return;
         }
         openLesson(r.id);
@@ -2266,6 +2541,7 @@ async function loadLibrary() {
       const delBtn = tr.querySelector(".btn-del");
       const editBtn = tr.querySelector(".btn-edit");
       const listsBtn = tr.querySelector(".btn-lesson-lists");
+      const progressSel = tr.querySelector(".library-progress-select");
       if (delBtn) {
         delBtn.addEventListener("click", (ev) => {
           ev.stopPropagation();
@@ -2288,6 +2564,34 @@ async function loadLibrary() {
           openLessonListsModal(r.id, songLabel);
         });
       }
+      if (progressSel) {
+        progressSel.addEventListener("click", (ev) => ev.stopPropagation());
+        progressSel.addEventListener("change", async (ev) => {
+          ev.stopPropagation();
+          const next = normalizeProgressClient(progressSel.value);
+          const prev = normalizeProgressClient(tr.dataset.progress);
+          progressSel.disabled = true;
+          try {
+            await setLessonProgress(r.id, next, { silent: false });
+            tr.dataset.progress = next;
+            if (activeLessonId === r.id) {
+              studyProgress = next;
+              syncStudyHeader();
+            }
+            if (libraryProgressFilter && libraryProgressFilter !== next) {
+              await loadLibrary();
+              return;
+            }
+            await refreshTrainingPool();
+            syncTrainPoolHint();
+          } catch (e) {
+            progressSel.value = prev;
+            if (st) st.textContent = String(e);
+          } finally {
+            progressSel.disabled = false;
+          }
+        });
+      }
       tbody.appendChild(tr);
     }
     for (const g of groups) {
@@ -2302,21 +2606,475 @@ async function loadLibrary() {
     }
     let stMsg = `${total} registro(s) · ${groups.filter((g) => (g.lessons || []).length).length} artista(s).`;
     if (listName) stMsg += ` · lista: «${listName}»`;
+    if (libraryProgressFilter) stMsg += ` · progresso: ${progressLabel(libraryProgressFilter)}`;
     if (query) stMsg += ` · filtro: «${query}»`;
     st.textContent = stMsg;
-    if (!query) {
-      const flat = [];
-      for (const g of groups) {
-        for (const r of g.lessons || []) flat.push(lessonToTrainEntry(r));
-      }
-      libraryTrainingPool = flat;
-      syncTrainPoolHint();
-    } else {
-      await refreshTrainingPool();
-      syncTrainPoolHint();
-    }
+    await refreshTrainingPool();
+    syncTrainPoolHint();
   } catch (e) {
     st.textContent = String(e);
+  }
+}
+
+async function setLessonProgress(lessonId, progress, { silent = true } = {}) {
+  const next = normalizeProgressClient(progress);
+  const res = await apiFetch(
+    "/api/lessons/" + encodeURIComponent(String(lessonId)) + "/progress",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ progress: next }),
+    }
+  );
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || "Não foi possível actualizar o progresso.");
+  }
+  if (!silent) {
+    const st = $("library-status") || $("study-status");
+    if (st) st.textContent = `Progresso: ${progressLabel(data.progress || next)}.`;
+  }
+  return normalizeProgressClient(data.progress || next);
+}
+
+async function promoteLessonToLearning(lessonId) {
+  try {
+    const res = await apiFetch(
+      "/api/lessons/" + encodeURIComponent(String(lessonId)) + "/mark-learning",
+      { method: "POST", body: "{}" }
+    );
+    const data = await res.json();
+    if (!res.ok || !data.ok) return null;
+    return {
+      progress: normalizeProgressClient(data.progress),
+      changed: Boolean(data.changed),
+    };
+  } catch (_e) {
+    return null;
+  }
+}
+
+function setYoutubeStatus(message) {
+  const el = $("youtube-status");
+  if (el) el.textContent = message || "";
+}
+
+function showStudyYoutubePanel(show) {
+  const panel = $("study-youtube");
+  if (!panel) return;
+  panel.classList.toggle("hidden", !show);
+}
+
+function setYoutubePasteVisible(show) {
+  const btn = $("btn-youtube-toggle-url");
+  const row = $("youtube-url-row");
+  if (btn) btn.classList.toggle("hidden", !show);
+  if (!show && row) {
+    row.classList.add("hidden");
+    const urlInput = $("youtube-url-input");
+    if (urlInput) urlInput.value = "";
+  }
+}
+
+function clearYoutubeCandidates() {
+  const box = $("youtube-candidates");
+  if (!box) return;
+  box.innerHTML = "";
+  box.classList.add("hidden");
+}
+
+function destroyYoutubePlayer() {
+  studyYoutubeId = null;
+  studyYoutubeTitle = "";
+  studyYoutubeCandidates = [];
+  const host = $("youtube-player");
+  if (host) {
+    const audio = host.querySelector("audio");
+    if (audio) {
+      try {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+    host.innerHTML = "";
+  }
+  const shell = $("youtube-player-shell");
+  if (shell) shell.classList.add("hidden");
+  const label = $("youtube-track-label");
+  if (label) label.textContent = "";
+  clearYoutubeCandidates();
+  setYoutubePasteVisible(false);
+  setYoutubeStatus("");
+  showStudyYoutubePanel(false);
+}
+
+async function mountYoutubePlayer(videoId, videoTitle) {
+  const id = String(videoId || "").trim();
+  if (!id) return false;
+  studyYoutubeId = id;
+  studyYoutubeTitle = videoTitle ? String(videoTitle).trim() : "";
+  showStudyYoutubePanel(true);
+  const shell = $("youtube-player-shell");
+  if (shell) shell.classList.remove("hidden");
+  const label = $("youtube-track-label");
+  if (label) {
+    label.textContent = studyYoutubeTitle
+      ? studyYoutubeTitle
+      : `Faixa · ${id}`;
+  }
+
+  const host = $("youtube-player");
+  if (!host) return false;
+  host.innerHTML = "";
+
+  setYoutubeStatus("A carregar áudio…");
+  try {
+    const audioEndpoint = shareMode
+      ? "/api/share/" + encodeURIComponent(String(shareToken)) + "/audio"
+      : "/api/youtube/audio";
+    const res = await apiFetch(audioEndpoint, {
+      method: "POST",
+      body: JSON.stringify({ video_id: id }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok || !data.play_url) {
+      setYoutubeStatus(data.error || "Não foi possível carregar o áudio.");
+      if (!shareMode) setYoutubePasteVisible(true);
+      return false;
+    }
+    if (data.title && !studyYoutubeTitle) {
+      studyYoutubeTitle = String(data.title);
+      if (label) label.textContent = studyYoutubeTitle;
+    }
+
+    const audio = document.createElement("audio");
+    audio.id = "youtube-audio";
+    audio.className = "youtube-audio";
+    audio.controls = true;
+    audio.preload = "metadata";
+    audio.controlsList = "nodownload";
+    audio.src = data.play_url;
+    audio.addEventListener("error", () => {
+      setYoutubeStatus(
+        shareMode
+          ? "Falha ao reproduzir o áudio desta partilha."
+          : "Falha ao reproduzir este áudio. Use «Buscar áudio» para outra versão ou cole um link."
+      );
+      if (!shareMode) setYoutubePasteVisible(true);
+    });
+    audio.addEventListener("loadedmetadata", () => {
+      setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
+      if (!shareMode) setYoutubePasteVisible(false);
+    });
+    host.appendChild(audio);
+    return true;
+  } catch (e) {
+    setYoutubeStatus(String(e));
+    setYoutubePasteVisible(true);
+    return false;
+  }
+}
+
+function renderYoutubeCandidates(candidates, { excludeId = null } = {}) {
+  const box = $("youtube-candidates");
+  if (!box) return;
+  box.innerHTML = "";
+  const skip = excludeId ? String(excludeId) : "";
+  const list = (Array.isArray(candidates) ? candidates : [])
+    .filter((c) => c && c.video_id && String(c.video_id) !== skip)
+    .slice(0, 6);
+  if (!list.length) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  for (const c of list) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-secondary youtube-candidate";
+    btn.setAttribute("role", "listitem");
+    const title = c.title || c.video_id || "Vídeo";
+    const channel = c.channel_title || "";
+    btn.innerHTML = `<span class="youtube-candidate-title">${esc(title)}</span>
+      <span class="youtube-candidate-meta">${esc(channel || "YouTube")}</span>`;
+    btn.addEventListener("click", async () => {
+      if (activeLessonId == null) return;
+      setYoutubeStatus("A guardar áudio…");
+      try {
+        await saveLessonYoutube(activeLessonId, c.video_id, title);
+        const ok = await mountYoutubePlayer(c.video_id, title);
+        clearYoutubeCandidates();
+        if (ok) {
+          setYoutubeStatus("Áudio actualizado.");
+          setYoutubePasteVisible(false);
+        }
+      } catch (e) {
+        setYoutubeStatus(String(e.message || e));
+        setYoutubePasteVisible(true);
+      }
+    });
+    box.appendChild(btn);
+  }
+}
+
+async function saveLessonYoutube(lessonId, videoId, videoTitle) {
+  const res = await apiFetch(
+    "/api/lessons/" + encodeURIComponent(String(lessonId)) + "/youtube",
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        video_id: videoId,
+        title: videoTitle || null,
+      }),
+    }
+  );
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || "Não foi possível guardar o áudio.");
+  }
+  studyYoutubeId = data.youtube_video_id || videoId;
+  studyYoutubeTitle = data.youtube_title || videoTitle || "";
+  return data;
+}
+
+async function searchStudyYoutube({ force = false, auto = false } = {}) {
+  if (!isLoggedIn || activeLessonId == null) return;
+  const title = studyTitle && studyTitle !== "Sem título" ? studyTitle : "";
+  const artist = studyArtist || "";
+  if (!title || !artist) {
+    showStudyYoutubePanel(true);
+    setYoutubeStatus("Defina título e artista na lição para buscar o áudio.");
+    setYoutubePasteVisible(true);
+    clearYoutubeCandidates();
+    return;
+  }
+  showStudyYoutubePanel(true);
+  clearYoutubeCandidates();
+  if (auto) setYoutubePasteVisible(false);
+  setYoutubeStatus(auto ? "A procurar o áudio…" : "A buscar outras versões…");
+  try {
+    const res = await apiFetch("/api/youtube/search", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        artist,
+        lesson_id: activeLessonId,
+        force: Boolean(force),
+      }),
+    });
+    const data = await res.json();
+    studyYoutubeCandidates = Array.isArray(data.candidates) ? data.candidates : [];
+    if (!res.ok || !data.ok) {
+      setYoutubeStatus(data.error || "Não foi possível encontrar o áudio.");
+      setYoutubePasteVisible(true);
+      // Em falha automática não listamos opções; só no pedido manual.
+      if (!auto) renderYoutubeCandidates(studyYoutubeCandidates);
+      return;
+    }
+
+    // Automático (ou ainda sem áudio): monta o melhor resultado.
+    // «Buscar áudio» com player já activo: só mostra outras versões.
+    const alreadyPlaying = Boolean(studyYoutubeId) && !auto;
+    if (!alreadyPlaying) {
+      const ok = await mountYoutubePlayer(data.video_id, data.title || "");
+      if (!ok) {
+        setYoutubePasteVisible(true);
+        if (!auto) {
+          renderYoutubeCandidates(studyYoutubeCandidates, { excludeId: data.video_id });
+        }
+        return;
+      }
+      setYoutubePasteVisible(false);
+    }
+
+    if (auto) {
+      clearYoutubeCandidates();
+      setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
+    } else {
+      renderYoutubeCandidates(studyYoutubeCandidates, {
+        excludeId: studyYoutubeId || data.video_id,
+      });
+      setYoutubeStatus(
+        studyYoutubeCandidates.length > 1
+          ? "Outras versões encontradas — toque numa para trocar."
+          : alreadyPlaying
+            ? "Não há outras versões além da actual."
+            : "Áudio actualizado."
+      );
+    }
+  } catch (e) {
+    setYoutubeStatus(String(e));
+    setYoutubePasteVisible(true);
+    clearYoutubeCandidates();
+  }
+}
+
+async function setupStudyYoutube(data) {
+  showStudyYoutubePanel(true);
+  clearYoutubeCandidates();
+  setYoutubePasteVisible(false);
+  const existingId = data && data.youtube_video_id ? String(data.youtube_video_id).trim() : "";
+  if (existingId) {
+    const ok = await mountYoutubePlayer(existingId, data.youtube_title || "");
+    if (ok) setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
+    return;
+  }
+  if (shareMode) {
+    setYoutubeStatus("Esta partilha não tem áudio associado.");
+    return;
+  }
+  if (isLoggedIn && studyTitle && studyTitle !== "Sem título" && studyArtist) {
+    await searchStudyYoutube({ auto: true, force: false });
+  } else {
+    setYoutubeStatus("Não foi possível buscar automaticamente — cole um link do YouTube.");
+    setYoutubePasteVisible(true);
+  }
+}
+
+async function loadSharedLesson(token) {
+  const tok = String(token || "").trim();
+  const st = $("study-status");
+  if (!tok) {
+    if (st) st.textContent = "Link de partilha inválido.";
+    return;
+  }
+  if (st) st.textContent = "A abrir partilha…";
+  try {
+    const res = await apiFetch("/api/share/" + encodeURIComponent(tok));
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      if (st) st.textContent = data.error || "Partilha não encontrada.";
+      syncStudyHeader();
+      return;
+    }
+    clearEditingMode();
+    clearTrainingMode();
+    activeLessonId = data.id;
+    activeLessonLyrics = data.lyrics_en || "";
+    studyTitle =
+      data.title_hint && String(data.title_hint).trim()
+        ? String(data.title_hint).trim()
+        : "Sem título";
+    studyArtist =
+      data.artist_hint && String(data.artist_hint).trim()
+        ? String(data.artist_hint).trim()
+        : "";
+    studyProgress = "aprender";
+    activeLessonShareToken = tok;
+    displayLesson(data.lesson);
+    $("error-panel")?.classList.add("hidden");
+    setResultMeta("Partilha só de leitura");
+    setTab("translation");
+    syncStudyHeader();
+    setView("study");
+    await setupStudyYoutube(data);
+    if (st) st.textContent = "";
+    $("study-youtube")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    if (st) st.textContent = String(e);
+  }
+}
+
+function closeShareModal() {
+  closeModal("share-modal");
+  setModalError("share-modal-error", "");
+}
+
+async function readJsonResponse(res) {
+  const text = await res.text();
+  const trimmed = (text || "").trim();
+  if (!trimmed) return {};
+  try {
+    return JSON.parse(trimmed);
+  } catch (_e) {
+    if (trimmed.startsWith("<!") || trimmed.toLowerCase().startsWith("<!doctype")) {
+      throw new Error(
+        "O servidor respondeu com uma página HTML em vez de JSON. Reinicie o Trusicas (python web.py) e actualize a página."
+      );
+    }
+    throw new Error("Resposta inválida do servidor.");
+  }
+}
+
+async function openShareModal() {
+  if (!isLoggedIn || activeLessonId == null || shareMode) return;
+  setModalError("share-modal-error", "");
+  const input = $("share-url-input");
+  const hint = $("share-modal-hint");
+  if (input) input.value = "A gerar link…";
+  if (hint) hint.textContent = "";
+  openModal("share-modal");
+  try {
+    const res = await apiFetch(
+      "/api/lessons/" + encodeURIComponent(String(activeLessonId)) + "/share",
+      { method: "POST", body: JSON.stringify({ rotate: false }) }
+    );
+    const data = await readJsonResponse(res);
+    if (!res.ok || !data.ok) {
+      setModalError("share-modal-error", data.error || "Falha ao criar link.");
+      if (input) input.value = "";
+      return;
+    }
+    activeLessonShareToken = data.share_token || null;
+    const url = data.url || `${window.location.origin}${data.path || ""}`;
+    if (input) input.value = url;
+    if (hint) {
+      hint.textContent =
+        "Qualquer pessoa com o link pode estudar esta música (sem editar a sua conta).";
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      if (hint) hint.textContent = "Link copiado para a área de transferência.";
+    } catch (_e) {
+      /* utilizador pode copiar manualmente */
+    }
+  } catch (e) {
+    setModalError("share-modal-error", String(e.message || e));
+    if (input) input.value = "";
+  }
+}
+
+async function copyShareLink() {
+  const input = $("share-url-input");
+  const url = (input?.value || "").trim();
+  const hint = $("share-modal-hint");
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    if (hint) hint.textContent = "Link copiado.";
+  } catch (_e) {
+    input?.select();
+    if (hint) hint.textContent = "Seleccione o link e copie com Ctrl+C.";
+  }
+}
+
+async function revokeShareLink() {
+  if (!isLoggedIn || activeLessonId == null) return;
+  if (!confirm("Desactivar o link de partilha? Quem o tiver deixa de poder abrir a lição.")) {
+    return;
+  }
+  try {
+    const res = await apiFetch(
+      "/api/lessons/" + encodeURIComponent(String(activeLessonId)) + "/share",
+      { method: "DELETE" }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      setModalError("share-modal-error", data.error || "Falha ao desactivar.");
+      return;
+    }
+    activeLessonShareToken = null;
+    const input = $("share-url-input");
+    if (input) input.value = "";
+    const hint = $("share-modal-hint");
+    if (hint) hint.textContent = "Link desactivado.";
+    closeShareModal();
+    const st = $("study-status");
+    if (st) st.textContent = "Partilha desactivada.";
+  } catch (e) {
+    setModalError("share-modal-error", String(e));
   }
 }
 
@@ -2329,25 +3087,28 @@ async function openLesson(id, opts = {}) {
   } else {
     clearTrainingMode();
   }
-  const st = $("status");
-  st.textContent = training ? "A preparar treino…" : "Abrindo lição…";
+  const st = $("study-status") || $("status");
+  if (st) st.textContent = training ? "A preparar treino…" : "Abrindo lição…";
   try {
     const res = await apiFetch("/api/lessons/" + encodeURIComponent(String(id)));
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      st.textContent = data.error || "Não encontrado.";
+      if (st) st.textContent = data.error || "Não encontrado.";
       return;
     }
-    $("lyrics").value = data.lyrics_en || "";
-    $("title").value = data.title_hint || "";
-    $("artist").value = data.artist_hint || "";
-    if ($("cifra")) $("cifra").value = cifraTextFromLesson(data.lesson);
+    // Não preenche o formulário «Nova lição» — a aula vive em «Aula».
     activeLessonId = id;
+    activeLessonLyrics = data.lyrics_en || "";
+    studyTitle =
+      data.title_hint && String(data.title_hint).trim() ? String(data.title_hint).trim() : "Sem título";
+    studyArtist =
+      data.artist_hint && String(data.artist_hint).trim() ? String(data.artist_hint).trim() : "";
+    studyProgress = normalizeProgressClient(data.progress);
+    activeLessonShareToken = data.share_token ? String(data.share_token).trim() : null;
     displayLesson(data.lesson);
-    $("error-panel").classList.add("hidden");
-    const title = data.title_hint && String(data.title_hint).trim() ? data.title_hint : "Sem título";
-    const artist = data.artist_hint && String(data.artist_hint).trim() ? data.artist_hint : "";
-    const trainLabel = opts.trainLabel || formatTrainLabel({ title, artist: artist || "Artista desconhecido" });
+    $("error-panel")?.classList.add("hidden");
+    const trainLabel =
+      opts.trainLabel || formatTrainLabel({ title: studyTitle, artist: studyArtist || "Artista desconhecido" });
     if (training) {
       setTrainingBanner(true, trainLabel);
       setResultMeta(`Treino · ${trainLabel}`);
@@ -2356,26 +3117,41 @@ async function openLesson(id, opts = {}) {
       setResultMeta(`Lição #${data.id} · ${formatLibraryDate(data.created_at)}`);
       setTab("translation");
     }
-    setView("create");
-    $("result").scrollIntoView({ behavior: "smooth", block: "start" });
-    st.textContent = training ? "Boa prática!" : "";
+    syncStudyHeader();
+    setView("study");
+    await setupStudyYoutube(data);
+    const ytPanel = $("study-youtube");
+    if (ytPanel && !ytPanel.classList.contains("hidden")) {
+      ytPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } else {
+      $("result")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    if (st) st.textContent = training ? "Boa prática!" : "";
+    if (isLoggedIn && !shareMode && studyProgress === "aprender") {
+      const promoted = await promoteLessonToLearning(id);
+      if (promoted && promoted.changed) {
+        studyProgress = promoted.progress;
+        syncStudyHeader();
+      }
+    }
   } catch (e) {
-    st.textContent = String(e);
+    if (st) st.textContent = String(e);
   }
 }
 
 async function editLesson(id) {
   if (!isLoggedIn) {
-    $("status").textContent = "Entre na sua conta para editar.";
+    const st0 = $("library-status") || $("status");
+    if (st0) st0.textContent = "Entre na sua conta para editar.";
     return;
   }
   const st = $("status");
-  st.textContent = "A carregar para edição…";
+  if (st) st.textContent = "A carregar para edição…";
   try {
     const res = await apiFetch("/api/lessons/" + encodeURIComponent(String(id)));
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      st.textContent = data.error || "Não encontrado.";
+      if (st) st.textContent = data.error || "Não encontrado.";
       return;
     }
     $("lyrics").value = data.lyrics_en || "";
@@ -2383,17 +3159,24 @@ async function editLesson(id) {
     $("artist").value = data.artist_hint || "";
     if ($("cifra")) $("cifra").value = cifraTextFromLesson(data.lesson);
     activeLessonId = id;
+    activeLessonLyrics = data.lyrics_en || "";
+    studyTitle =
+      data.title_hint && String(data.title_hint).trim() ? String(data.title_hint).trim() : "Sem título";
+    studyArtist =
+      data.artist_hint && String(data.artist_hint).trim() ? String(data.artist_hint).trim() : "";
+    studyProgress = normalizeProgressClient(data.progress);
     editingLessonId = id;
     setEditBanner(true, id);
     displayLesson(data.lesson);
-    $("error-panel").classList.add("hidden");
+    $("error-panel")?.classList.add("hidden");
     setResultMeta(`A editar · #${data.id} · ${formatLibraryDate(data.created_at)}`);
+    syncStudyHeader();
     setView("create");
-    $("lyrics").scrollIntoView({ behavior: "smooth", block: "center" });
-    st.textContent = "";
+    $("lyrics")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (st) st.textContent = "";
     syncEditToolbar();
   } catch (e) {
-    st.textContent = String(e);
+    if (st) st.textContent = String(e);
   }
 }
 
@@ -2529,11 +3312,118 @@ $("backup-file-input")?.addEventListener("change", (ev) => {
 });
 
 $("btn-random-train")?.addEventListener("click", () => spinRandomTraining());
+
+$("train-include-known")?.addEventListener("change", async () => {
+  await refreshTrainingPool();
+  syncTrainPoolHint();
+});
+
+document.querySelectorAll(".progress-filter-chip").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const value = btn.getAttribute("data-progress-filter") || "";
+    libraryProgressFilter = value;
+    document.querySelectorAll(".progress-filter-chip").forEach((b) => {
+      b.classList.toggle(
+        "active",
+        (b.getAttribute("data-progress-filter") || "") === libraryProgressFilter
+      );
+    });
+    loadLibrary();
+  });
+});
+
+$("study-progress")?.addEventListener("change", async () => {
+  const sel = $("study-progress");
+  if (!sel || activeLessonId == null || !isLoggedIn) return;
+  const prev = normalizeProgressClient(studyProgress);
+  const next = normalizeProgressClient(sel.value);
+  if (next === prev) return;
+  sel.disabled = true;
+  try {
+    studyProgress = await setLessonProgress(activeLessonId, next, { silent: false });
+    syncStudyHeader();
+    const studySt = $("study-status");
+    if (studySt) studySt.textContent = `Progresso: ${progressLabel(studyProgress)}.`;
+  } catch (e) {
+    sel.value = prev;
+    const studySt = $("study-status");
+    if (studySt) studySt.textContent = String(e);
+  } finally {
+    sel.disabled = !isLoggedIn || activeLessonId == null;
+  }
+});
+
+$("btn-youtube-search")?.addEventListener("click", () => {
+  searchStudyYoutube({ force: true, auto: false });
+});
+
+$("btn-youtube-toggle-url")?.addEventListener("click", () => {
+  const row = $("youtube-url-row");
+  if (!row) return;
+  const open = row.classList.contains("hidden");
+  row.classList.toggle("hidden", !open);
+  if (open) {
+    showStudyYoutubePanel(true);
+    $("youtube-url-input")?.focus();
+  }
+});
+
+$("btn-youtube-apply-url")?.addEventListener("click", async () => {
+  if (!isLoggedIn || activeLessonId == null) {
+    setYoutubeStatus("Abra uma lição na sua conta para guardar o link.");
+    return;
+  }
+  const raw = ($("youtube-url-input")?.value || "").trim();
+  if (!raw) {
+    setYoutubeStatus("Cole um link do YouTube.");
+    return;
+  }
+  setYoutubeStatus("A guardar link…");
+  try {
+    const res = await apiFetch(
+      "/api/lessons/" + encodeURIComponent(String(activeLessonId)) + "/youtube",
+      {
+        method: "PATCH",
+        body: JSON.stringify({ url: raw }),
+      }
+    );
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setYoutubeStatus(data.error || "Link inválido.");
+      return;
+    }
+    const ok = await mountYoutubePlayer(data.youtube_video_id, data.youtube_title || "");
+    clearYoutubeCandidates();
+    if (ok) {
+      setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
+      setYoutubePasteVisible(false);
+    }
+  } catch (e) {
+    setYoutubeStatus(String(e));
+    setYoutubePasteVisible(true);
+  }
+});
 $("btn-another-random")?.addEventListener("click", () => spinRandomTraining());
 $("btn-exit-training")?.addEventListener("click", () => {
-  wipeLessonWorkspace({ focusLyrics: false, resetView: true });
-  $("status").textContent = "Treino terminado — área limpa.";
-  loadLibrary();
+  clearTrainingMode();
+  if (activeLessonId != null) {
+    setView("study");
+    const st = $("study-status");
+    if (st) st.textContent = "Treino terminado.";
+  } else {
+    goToCreateFresh({ focusLyrics: false, message: "Treino terminado." });
+  }
+});
+
+$("btn-study-library")?.addEventListener("click", () => setView("library"));
+$("btn-study-new-lesson")?.addEventListener("click", () => {
+  goToCreateFresh({
+    focusLyrics: true,
+    message: "Formulário limpo — pronto para a próxima música.",
+  });
+});
+$("btn-study-edit")?.addEventListener("click", () => {
+  if (activeLessonId != null) editLesson(activeLessonId);
 });
 
 const libSearch = $("library-search");
@@ -2548,15 +3438,6 @@ if (libSearch) {
     }
   });
 }
-
-$("btn-cancel-edit").addEventListener("click", () => {
-  const snap = lastLoadedLessonSnapshot;
-  clearEditingMode();
-  if (snap && $("result") && !$("result").classList.contains("hidden")) {
-    displayLesson(snap);
-  }
-  $("status").textContent = "";
-});
 
 async function saveLessonTextOnly() {
   if (!isLoggedIn || editingLessonId == null) return;
@@ -2610,14 +3491,33 @@ async function saveLessonTextOnly() {
 
 $("btn-save-lesson").addEventListener("click", () => saveLessonTextOnly());
 
+$("btn-cancel-edit").addEventListener("click", () => {
+  const snap = lastLoadedLessonSnapshot;
+  clearEditingMode();
+  clearCreateFormFields();
+  if (snap) displayLesson(snap);
+  syncStudyHeader();
+  setView("study");
+  const st = $("status");
+  if (st) st.textContent = "";
+  const studySt = $("study-status");
+  if (studySt) studySt.textContent = "";
+  syncEditToolbar();
+});
+
 $("btn-new-lesson")?.addEventListener("click", () => {
   if (!isLoggedIn) {
     $("status").textContent = "Entre na sua conta para criar lições.";
     return;
   }
-  wipeLessonWorkspace({ focusLyrics: true, resetView: true });
-  $("status").textContent = "Formulário limpo — pronto para a próxima música.";
+  goToCreateFresh({
+    focusLyrics: true,
+    message: "Formulário limpo — pronto para a próxima música.",
+  });
 });
+
+$("btn-go-to-lesson")?.addEventListener("click", () => goToPendingLesson());
+$("btn-generate-another")?.addEventListener("click", () => startAnotherLessonAfterGenerate());
 
 $("btn-generate").addEventListener("click", async () => {
   if (!isLoggedIn) {
@@ -2700,6 +3600,7 @@ $("btn-generate").addEventListener("click", async () => {
           artist: payload.artist || "",
           elapsedMs,
           statusOverride: cacheMsg,
+          fromCache: true,
         });
       } else {
         startNextLessonAfterGenerate(saved, {
@@ -2707,6 +3608,7 @@ $("btn-generate").addEventListener("click", async () => {
           artist: payload.artist || "",
           elapsedMs,
           modelUsed: data.model_used || null,
+          fromCache: false,
         });
       }
     } else {
@@ -2786,11 +3688,21 @@ document.addEventListener("click", (ev) => {
 });
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
-  if ($("lesson-lists-modal") && !$("lesson-lists-modal").classList.contains("hidden")) closeLessonListsModal();
+  if ($("share-modal") && !$("share-modal").classList.contains("hidden")) closeShareModal();
+  else if ($("lesson-lists-modal") && !$("lesson-lists-modal").classList.contains("hidden")) closeLessonListsModal();
   else if ($("playlist-modal") && !$("playlist-modal").classList.contains("hidden")) closePlaylistModal();
   else if ($("users-modal") && !$("users-modal").classList.contains("hidden")) closeUsersModal();
   else if ($("settings-modal") && !$("settings-modal").classList.contains("hidden")) closeSettingsModal();
 });
 
 setLyricsInputMode("paste");
+shareToken = detectShareMode();
+shareMode = Boolean(shareToken);
 refreshAuth();
+
+$("btn-study-share")?.addEventListener("click", () => openShareModal());
+$("btn-share-copy")?.addEventListener("click", () => copyShareLink());
+$("btn-share-revoke")?.addEventListener("click", () => revokeShareLink());
+document.querySelectorAll("[data-close-share-modal]").forEach((el) => {
+  el.addEventListener("click", () => closeShareModal());
+});

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import threading
@@ -17,6 +18,53 @@ from config import ensure_env_loaded
 
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 _db_lock = threading.RLock()
+
+PROGRESS_APRENDER = "aprender"
+PROGRESS_APRENDENDO = "aprendendo"
+PROGRESS_JA_SEI = "ja_sei"
+PROGRESS_VALUES = frozenset(
+    {PROGRESS_APRENDER, PROGRESS_APRENDENDO, PROGRESS_JA_SEI}
+)
+# Treino por defeito: ainda a aprender + a estudar (exclui «Já sei»).
+PROGRESS_TRAIN_DEFAULT = (PROGRESS_APRENDER, PROGRESS_APRENDENDO)
+
+
+def normalize_progress(value: Any) -> str | None:
+    """Devolve um progresso válido ou None se inválido."""
+    raw = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "aprender": PROGRESS_APRENDER,
+        "to_learn": PROGRESS_APRENDER,
+        "new": PROGRESS_APRENDER,
+        "aprendendo": PROGRESS_APRENDENDO,
+        "learning": PROGRESS_APRENDENDO,
+        "studying": PROGRESS_APRENDENDO,
+        "ja_sei": PROGRESS_JA_SEI,
+        "jasei": PROGRESS_JA_SEI,
+        "known": PROGRESS_JA_SEI,
+        "done": PROGRESS_JA_SEI,
+    }
+    return aliases.get(raw)
+
+
+def parse_progress_filter(raw: str | None) -> list[str] | None:
+    """
+    Interpreta ?progress=aprender,aprendendo.
+    None = sem filtro; lista vazia = filtro inválido (caller trata).
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or text.lower() in {"all", "*", "todos", "todas"}:
+        return None
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in text.replace(";", ",").split(","):
+        p = normalize_progress(part)
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
 
 
 def _project_root() -> Path:
@@ -90,18 +138,66 @@ def init_db() -> None:
               model TEXT,
               lesson_json TEXT NOT NULL,
               raw_response TEXT,
-              user_id INTEGER
+              user_id INTEGER,
+              progress TEXT NOT NULL DEFAULT 'aprender'
             )
             """
         )
         cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(lessons)").fetchall()}
         if "user_id" not in cols:
             conn.execute("ALTER TABLE lessons ADD COLUMN user_id INTEGER")
+        if "progress" not in cols:
+            conn.execute(
+                "ALTER TABLE lessons ADD COLUMN progress TEXT NOT NULL DEFAULT 'aprender'"
+            )
+        conn.execute(
+            """
+            UPDATE lessons
+            SET progress = 'aprender'
+            WHERE progress IS NULL
+               OR TRIM(progress) = ''
+               OR progress NOT IN ('aprender', 'aprendendo', 'ja_sei')
+            """
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lessons_created_at ON lessons(created_at DESC)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lessons_user_id ON lessons(user_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lessons_progress ON lessons(user_id, progress)"
+        )
+        if "youtube_video_id" not in cols:
+            conn.execute("ALTER TABLE lessons ADD COLUMN youtube_video_id TEXT")
+        if "youtube_title" not in cols:
+            conn.execute("ALTER TABLE lessons ADD COLUMN youtube_title TEXT")
+        if "share_token" not in cols:
+            conn.execute("ALTER TABLE lessons ADD COLUMN share_token TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_lessons_share_token "
+            "ON lessons(share_token) WHERE share_token IS NOT NULL"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS youtube_cache (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+              title_norm TEXT NOT NULL,
+              artist_norm TEXT NOT NULL,
+              title TEXT NOT NULL,
+              artist TEXT NOT NULL,
+              video_id TEXT NOT NULL,
+              video_title TEXT,
+              channel_title TEXT,
+              UNIQUE(title_norm, artist_norm)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_youtube_cache_norm "
+            "ON youtube_cache(title_norm, artist_norm)"
         )
         conn.execute(
             """
@@ -232,6 +328,128 @@ def save_shared_lyrics(
         conn.commit()
     return True
 
+
+def save_shared_youtube(
+    *,
+    title: str | None,
+    artist: str | None,
+    video_id: str,
+    video_title: str | None = None,
+    channel_title: str | None = None,
+) -> bool:
+    key = normalize_song_key(title, artist)
+    vid = str(video_id or "").strip()
+    if key is None or not vid:
+        return False
+    title_norm, artist_norm = key
+    title_s = str(title or "").strip() or title_norm
+    artist_s = str(artist or "").strip() or artist_norm
+    init_db()
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO youtube_cache (
+              title_norm, artist_norm, title, artist, video_id,
+              video_title, channel_title, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(title_norm, artist_norm) DO UPDATE SET
+              title = excluded.title,
+              artist = excluded.artist,
+              video_id = excluded.video_id,
+              video_title = excluded.video_title,
+              channel_title = excluded.channel_title,
+              updated_at = datetime('now')
+            """,
+            (
+                title_norm,
+                artist_norm,
+                title_s,
+                artist_s,
+                vid,
+                str(video_title or "").strip() or None,
+                str(channel_title or "").strip() or None,
+            ),
+        )
+        conn.commit()
+    return True
+
+
+def find_shared_youtube(title: str | None, artist: str | None) -> dict[str, str] | None:
+    key = normalize_song_key(title, artist)
+    if key is None:
+        return None
+    title_norm, artist_norm = key
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT video_id, video_title, channel_title, title, artist
+            FROM youtube_cache
+            WHERE title_norm = ? AND artist_norm = ?
+            LIMIT 1
+            """,
+            (title_norm, artist_norm),
+        ).fetchone()
+    if row is None or not str(row["video_id"] or "").strip():
+        return None
+    return {
+        "video_id": str(row["video_id"]).strip(),
+        "video_title": str(row["video_title"] or "").strip(),
+        "channel_title": str(row["channel_title"] or "").strip(),
+        "title": str(row["title"] or title or "").strip(),
+        "artist": str(row["artist"] or artist or "").strip(),
+    }
+
+
+def set_lesson_youtube(
+    lesson_id: int,
+    *,
+    user_id: int,
+    video_id: str | None,
+    video_title: str | None = None,
+) -> dict[str, Any] | None:
+    """Guarda ou limpa o vídeo YouTube da lição."""
+    vid = str(video_id or "").strip() or None
+    title = str(video_title or "").strip() or None
+    if vid is None:
+        title = None
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE lessons
+            SET youtube_video_id = ?, youtube_title = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (vid, title, lesson_id, user_id),
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            """
+            SELECT title_hint, artist_hint, youtube_video_id, youtube_title
+            FROM lessons WHERE id = ? AND user_id = ?
+            """,
+            (lesson_id, user_id),
+        ).fetchone()
+        conn.commit()
+    if row is None:
+        return None
+    out_id = str(row["youtube_video_id"] or "").strip() or None
+    out_title = str(row["youtube_title"] or "").strip() or None
+    if out_id:
+        save_shared_youtube(
+            title=row["title_hint"],
+            artist=row["artist_hint"],
+            video_id=out_id,
+            video_title=out_title,
+        )
+    return {
+        "id": lesson_id,
+        "youtube_video_id": out_id,
+        "youtube_title": out_title,
+    }
 
 def cifra_text_from_lesson(lesson: dict[str, Any] | None) -> str:
     if not isinstance(lesson, dict):
@@ -691,6 +909,7 @@ class LessonSummary:
     artist_hint: str | None
     model: str | None
     lyrics_preview: str
+    progress: str = PROGRESS_APRENDER
 
 
 @dataclass(frozen=True)
@@ -931,11 +1150,17 @@ def list_playlists_for_lesson(*, user_id: int, lesson_id: int) -> list[int]:
 
 
 def list_lessons(
-    *, user_id: int, limit: int = 100, offset: int = 0, playlist_id: int | None = None
+    *,
+    user_id: int,
+    limit: int = 100,
+    offset: int = 0,
+    playlist_id: int | None = None,
+    progress: list[str] | None = None,
 ) -> list[LessonSummary]:
     init_db()
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
+    progress_vals = _sanitize_progress_list(progress)
     with connect() as conn:
         if playlist_id is not None:
             pl = conn.execute(
@@ -944,31 +1169,68 @@ def list_lessons(
             ).fetchone()
             if pl is None:
                 return []
+            where = ["l.user_id = ?", "pl.playlist_id = ?"]
+            args: list[Any] = [user_id, playlist_id]
+            if progress_vals:
+                placeholders = ",".join("?" for _ in progress_vals)
+                where.append(f"l.progress IN ({placeholders})")
+                args.extend(progress_vals)
+            args.extend([limit, offset])
             rows = conn.execute(
-                """
+                f"""
                 SELECT l.id, l.created_at, l.title_hint, l.artist_hint, l.model,
-                       substr(l.lyrics_en, 1, 160) AS lyrics_preview
+                       substr(l.lyrics_en, 1, 160) AS lyrics_preview,
+                       COALESCE(NULLIF(TRIM(l.progress), ''), 'aprender') AS progress
                 FROM lessons l
                 INNER JOIN playlist_lessons pl ON pl.lesson_id = l.id
-                WHERE l.user_id = ? AND pl.playlist_id = ?
+                WHERE {" AND ".join(where)}
                 ORDER BY pl.position ASC, datetime(l.created_at) DESC, l.id DESC
                 LIMIT ? OFFSET ?
                 """,
-                (user_id, playlist_id, limit, offset),
+                args,
             ).fetchall()
         else:
+            where = ["user_id = ?"]
+            args = [user_id]
+            if progress_vals:
+                placeholders = ",".join("?" for _ in progress_vals)
+                where.append(f"progress IN ({placeholders})")
+                args.extend(progress_vals)
+            args.extend([limit, offset])
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, created_at, title_hint, artist_hint, model,
-                       substr(lyrics_en, 1, 160) AS lyrics_preview
+                       substr(lyrics_en, 1, 160) AS lyrics_preview,
+                       COALESCE(NULLIF(TRIM(progress), ''), 'aprender') AS progress
                 FROM lessons
-                WHERE user_id = ?
+                WHERE {" AND ".join(where)}
                 ORDER BY datetime(created_at) DESC, id DESC
                 LIMIT ? OFFSET ?
                 """,
-                (user_id, limit, offset),
+                args,
             ).fetchall()
     return _rows_to_summaries(rows)
+
+
+def _sanitize_progress_list(progress: list[str] | None) -> list[str] | None:
+    if not progress:
+        return None
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in progress:
+        p = normalize_progress(raw)
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out or None
+
+
+def _row_progress(row: sqlite3.Row) -> str:
+    try:
+        raw = row["progress"]
+    except (KeyError, IndexError):
+        return PROGRESS_APRENDER
+    return normalize_progress(raw) or PROGRESS_APRENDER
 
 
 def _rows_to_summaries(rows: list[sqlite3.Row]) -> list[LessonSummary]:
@@ -982,6 +1244,7 @@ def _rows_to_summaries(rows: list[sqlite3.Row]) -> list[LessonSummary]:
                 artist_hint=r["artist_hint"],
                 model=r["model"],
                 lyrics_preview=str(r["lyrics_preview"] or ""),
+                progress=_row_progress(r),
             )
         )
     return out
@@ -999,17 +1262,20 @@ def list_lessons_grouped_by_artist(
     limit: int = 500,
     search: str | None = None,
     playlist_id: int | None = None,
+    progress: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """
     Lessons ordered alphabetically by artist (case-insensitive), then by date desc within each artist.
     Rows without artist are grouped under '(sem artista)' at the end.
     Optional search: each word must match (substring, case-insensitive) in title_hint OR artist_hint OR lyrics_en.
     Optional playlist_id: only lessons in that playlist.
+    Optional progress: filter by progress values.
     Returns (groups, total_count) where each group is {"artist": str, "lessons": [dict, ...]}.
     """
     init_db()
     limit = max(1, min(limit, 2000))
     terms = _library_search_terms(search)
+    progress_vals = _sanitize_progress_list(progress)
     where_parts = ["l.user_id = ?"]
     args: list[Any] = [user_id]
     join_sql = ""
@@ -1017,6 +1283,10 @@ def list_lessons_grouped_by_artist(
         join_sql = "INNER JOIN playlist_lessons pl ON pl.lesson_id = l.id"
         where_parts.append("pl.playlist_id = ?")
         args.append(playlist_id)
+    if progress_vals:
+        placeholders = ",".join("?" for _ in progress_vals)
+        where_parts.append(f"l.progress IN ({placeholders})")
+        args.extend(progress_vals)
     if terms:
         for term in terms:
             where_parts.append(
@@ -1040,7 +1310,8 @@ def list_lessons_grouped_by_artist(
         rows = conn.execute(
             f"""
             SELECT l.id, l.created_at, l.title_hint, l.artist_hint, l.model,
-                   substr(l.lyrics_en, 1, 160) AS lyrics_preview
+                   substr(l.lyrics_en, 1, 160) AS lyrics_preview,
+                   COALESCE(NULLIF(TRIM(l.progress), ''), 'aprender') AS progress
             FROM lessons l
             {join_sql}
             {where_sql}
@@ -1064,6 +1335,7 @@ def list_lessons_grouped_by_artist(
             "artist_hint": s.artist_hint,
             "model": s.model,
             "lyrics_preview": s.lyrics_preview,
+            "progress": s.progress,
         }
         if not groups or groups[-1]["artist"] != label:
             groups.append({"artist": label, "lessons": []})
@@ -1071,12 +1343,67 @@ def list_lessons_grouped_by_artist(
     return groups, len(summaries)
 
 
+def set_lesson_progress(
+    lesson_id: int, *, user_id: int, progress: str
+) -> dict[str, Any] | None:
+    """Actualiza o estado de progresso. Devolve {id, progress} ou None."""
+    normalized = normalize_progress(progress)
+    if normalized is None:
+        raise ValueError(
+            "Progresso inválido. Use: aprender, aprendendo ou ja_sei."
+        )
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE lessons SET progress = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (normalized, lesson_id, user_id),
+        )
+        if cur.rowcount == 0:
+            return None
+        conn.commit()
+    return {"id": lesson_id, "progress": normalized}
+
+
+def mark_lesson_learning_if_new(
+    lesson_id: int, *, user_id: int
+) -> dict[str, Any] | None:
+    """Se estiver em «aprender», passa a «aprendendo». Caso contrário não altera."""
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT progress FROM lessons WHERE id = ? AND user_id = ?
+            """,
+            (lesson_id, user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        current = normalize_progress(row["progress"]) or PROGRESS_APRENDER
+        if current != PROGRESS_APRENDER:
+            return {"id": lesson_id, "progress": current, "changed": False}
+        conn.execute(
+            """
+            UPDATE lessons SET progress = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (PROGRESS_APRENDENDO, lesson_id, user_id),
+        )
+        conn.commit()
+    return {"id": lesson_id, "progress": PROGRESS_APRENDENDO, "changed": True}
+
+
 def get_lesson(lesson_id: int, *, user_id: int) -> dict[str, Any] | None:
     init_db()
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT id, created_at, title_hint, artist_hint, lyrics_en, model, lesson_json, raw_response
+            SELECT id, created_at, title_hint, artist_hint, lyrics_en, model,
+                   lesson_json, raw_response,
+                   COALESCE(NULLIF(TRIM(progress), ''), 'aprender') AS progress,
+                   youtube_video_id, youtube_title, share_token
             FROM lessons WHERE id = ? AND user_id = ?
             """,
             (lesson_id, user_id),
@@ -1087,6 +1414,17 @@ def get_lesson(lesson_id: int, *, user_id: int) -> dict[str, Any] | None:
         lesson = json.loads(row["lesson_json"])
     except json.JSONDecodeError:
         lesson = {}
+    yt_id = ""
+    yt_title = ""
+    share_token = ""
+    try:
+        yt_id = str(row["youtube_video_id"] or "").strip()
+        yt_title = str(row["youtube_title"] or "").strip()
+        share_token = str(row["share_token"] or "").strip()
+    except (KeyError, IndexError):
+        yt_id = ""
+        yt_title = ""
+        share_token = ""
     return {
         "id": int(row["id"]),
         "created_at": str(row["created_at"]),
@@ -1096,7 +1434,112 @@ def get_lesson(lesson_id: int, *, user_id: int) -> dict[str, Any] | None:
         "model": row["model"],
         "lesson": lesson,
         "raw_response": row["raw_response"],
+        "progress": _row_progress(row),
+        "youtube_video_id": yt_id or None,
+        "youtube_title": yt_title or None,
+        "share_token": share_token or None,
     }
+
+
+def _lesson_public_payload(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        lesson = json.loads(row["lesson_json"])
+    except (TypeError, json.JSONDecodeError):
+        lesson = {}
+    if not isinstance(lesson, dict):
+        lesson = {}
+    yt_id = ""
+    yt_title = ""
+    try:
+        yt_id = str(row["youtube_video_id"] or "").strip()
+        yt_title = str(row["youtube_title"] or "").strip()
+    except (KeyError, IndexError):
+        pass
+    return {
+        "id": int(row["id"]),
+        "created_at": str(row["created_at"]),
+        "title_hint": row["title_hint"],
+        "artist_hint": row["artist_hint"],
+        "lyrics_en": row["lyrics_en"],
+        "lesson": lesson,
+        "youtube_video_id": yt_id or None,
+        "youtube_title": yt_title or None,
+        "share_token": str(row["share_token"] or "").strip() or None,
+        "read_only": True,
+    }
+
+
+def get_lesson_by_share_token(token: str) -> dict[str, Any] | None:
+    """Lição pública só de leitura (sem raw_response / progresso / modelo)."""
+    tok = str(token or "").strip()
+    if not tok or len(tok) < 8:
+        return None
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, created_at, title_hint, artist_hint, lyrics_en, lesson_json,
+                   youtube_video_id, youtube_title, share_token
+            FROM lessons
+            WHERE share_token = ?
+            LIMIT 1
+            """,
+            (tok,),
+        ).fetchone()
+    if row is None:
+        return None
+    return _lesson_public_payload(row)
+
+
+def ensure_lesson_share_token(
+    lesson_id: int, *, user_id: int, rotate: bool = False
+) -> dict[str, Any] | None:
+    """Cria ou devolve o token de partilha da lição (dono)."""
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, share_token FROM lessons
+            WHERE id = ? AND user_id = ?
+            """,
+            (lesson_id, user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        current = str(row["share_token"] or "").strip()
+        if current and not rotate:
+            token = current
+        else:
+            token = secrets.token_urlsafe(18)
+            # Evita colisão improvável
+            for _ in range(5):
+                clash = conn.execute(
+                    "SELECT 1 FROM lessons WHERE share_token = ? LIMIT 1",
+                    (token,),
+                ).fetchone()
+                if clash is None:
+                    break
+                token = secrets.token_urlsafe(18)
+            conn.execute(
+                "UPDATE lessons SET share_token = ? WHERE id = ? AND user_id = ?",
+                (token, lesson_id, user_id),
+            )
+            conn.commit()
+    return {"id": lesson_id, "share_token": token}
+
+
+def revoke_lesson_share_token(lesson_id: int, *, user_id: int) -> bool:
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE lessons SET share_token = NULL
+            WHERE id = ? AND user_id = ?
+            """,
+            (lesson_id, user_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def delete_lesson(lesson_id: int, *, user_id: int) -> bool:
@@ -1208,13 +1651,58 @@ def restore_db_bytes(data: bytes) -> dict[str, Any]:
                   model TEXT,
                   lesson_json TEXT NOT NULL,
                   raw_response TEXT,
-                  user_id INTEGER
+                  user_id INTEGER,
+                  progress TEXT NOT NULL DEFAULT 'aprender'
                 )
                 """
             )
             cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(lessons)").fetchall()}
             if "user_id" not in cols:
                 conn.execute("ALTER TABLE lessons ADD COLUMN user_id INTEGER")
+            if "progress" not in cols:
+                conn.execute(
+                    "ALTER TABLE lessons ADD COLUMN progress TEXT NOT NULL DEFAULT 'aprender'"
+                )
+            conn.execute(
+                """
+                UPDATE lessons
+                SET progress = 'aprender'
+                WHERE progress IS NULL
+                   OR TRIM(progress) = ''
+                   OR progress NOT IN ('aprender', 'aprendendo', 'ja_sei')
+                """
+            )
+            if "youtube_video_id" not in cols:
+                conn.execute("ALTER TABLE lessons ADD COLUMN youtube_video_id TEXT")
+            if "youtube_title" not in cols:
+                conn.execute("ALTER TABLE lessons ADD COLUMN youtube_title TEXT")
+            if "share_token" not in cols:
+                conn.execute("ALTER TABLE lessons ADD COLUMN share_token TEXT")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_lessons_share_token "
+                "ON lessons(share_token) WHERE share_token IS NOT NULL"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS youtube_cache (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  title_norm TEXT NOT NULL,
+                  artist_norm TEXT NOT NULL,
+                  title TEXT NOT NULL,
+                  artist TEXT NOT NULL,
+                  video_id TEXT NOT NULL,
+                  video_title TEXT,
+                  channel_title TEXT,
+                  UNIQUE(title_norm, artist_norm)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_youtube_cache_norm "
+                "ON youtube_cache(title_norm, artist_norm)"
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS lyrics_cache (

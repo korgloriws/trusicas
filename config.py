@@ -133,3 +133,18 @@ def load_settings(*, temperature: float | None = None) -> Settings:
 
 def _truthy(raw: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def get_youtube_settings() -> dict[str, str]:
+    """Definições opcionais para busca YouTube (não exige chave no arranque)."""
+    ensure_env_loaded()
+    return {
+        "api_key": (os.getenv("YOUTUBE_API_KEY") or "").strip(),
+        "region_code": (os.getenv("YOUTUBE_REGION_CODE") or "BR").strip().upper() or "BR",
+        "relevance_language": (
+            os.getenv("YOUTUBE_RELEVANCE_LANGUAGE") or "pt"
+        )
+        .strip()
+        .lower()
+        or "pt",
+    }

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 from auth import (
     current_user,
@@ -18,30 +18,40 @@ from auth import (
 )
 from fetch_cifra import fetch_cifra
 from fetch_lyrics import fetch_lyrics
+from fetch_youtube import extract_youtube_video_id, resolve_youtube_audio, search_youtube
 from generate import generate_lesson
 from store import (
     add_lesson_to_playlist,
     create_playlist,
     delete_lesson,
     delete_playlist,
+    ensure_lesson_share_token,
     export_db_bytes,
     find_shared_cifra,
     find_shared_lesson,
     find_shared_lyrics,
+    find_shared_youtube,
     get_lesson,
+    get_lesson_by_share_token,
     get_playlist,
     init_db,
     insert_lesson,
     list_lessons,
     list_lessons_grouped_by_artist,
     list_playlists,
+    mark_lesson_learning_if_new,
     move_lesson_between_playlists,
+    parse_progress_filter,
     patch_lesson_metadata,
     remove_lesson_from_playlist,
     rename_playlist,
     restore_db_bytes,
+    revoke_lesson_share_token,
     save_shared_cifra,
     save_shared_lyrics,
+    save_shared_youtube,
+    set_lesson_progress,
+    set_lesson_youtube,
     update_lesson,
 )
 from users import (
@@ -74,6 +84,9 @@ def create_app() -> Flask:
     app.secret_key = get_secret_key()
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    # Evita servir HTML antigo quando o processo Flask fica aberto sem debug.
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.jinja_env.auto_reload = True
     lifetime_h = float(os.getenv("TRUSICAS_ADMIN_SESSION_HOURS", "168"))
     app.permanent_session_lifetime = timedelta(hours=lifetime_h)
     init_db()
@@ -86,6 +99,106 @@ def create_app() -> Flask:
             app_name="Trusicas",
             app_tagline="Inglês com música",
         )
+
+    @app.get("/s/<token>")
+    def share_page(token: str):
+        """Página pública só de leitura — o SPA detecta /s/… e carrega a lição."""
+        return render_template(
+            "index.html",
+            app_name="Trusicas",
+            app_tagline="Inglês com música",
+            share_token=str(token or "").strip(),
+        )
+
+    def _absolute_share_url(token: str) -> str:
+        base = (request.url_root or "").rstrip("/")
+        return f"{base}/s/{token}"
+
+    @app.get("/api/share/<token>")
+    def api_get_shared_lesson(token: str):
+        row = get_lesson_by_share_token(token)
+        if row is None:
+            return jsonify({"ok": False, "error": "Link de partilha inválido ou expirado."}), 404
+        return jsonify({"ok": True, **row})
+
+    @app.post("/api/share/<token>/audio")
+    def api_shared_youtube_audio(token: str):
+        """Áudio da lição partilhada (só o video_id guardado nessa lição)."""
+        row = get_lesson_by_share_token(token)
+        if row is None:
+            return jsonify({"ok": False, "error": "Link de partilha inválido ou expirado."}), 404
+        expected = str(row.get("youtube_video_id") or "").strip()
+        payload = request.get_json(silent=True) or {}
+        requested = extract_youtube_video_id(
+            str(payload.get("video_id") or payload.get("url") or expected)
+        )
+        if not expected or not requested or requested != expected:
+            return jsonify(
+                {"ok": False, "error": "Áudio não disponível nesta partilha."}
+            ), 404
+        result = resolve_youtube_audio(expected)
+        if not result.ok or not result.audio_url:
+            return jsonify(
+                {"ok": False, "error": result.error or "Áudio indisponível."}
+            ), 404
+        return jsonify(
+            {
+                "ok": True,
+                "video_id": expected,
+                "title": result.title or row.get("youtube_title"),
+                "mime": result.mime,
+                "ext": result.ext,
+                "play_url": f"/api/share/{token}/media/{expected}",
+            }
+        )
+
+    @app.get("/api/share/<token>/media/<video_id>")
+    def api_shared_youtube_media(token: str, video_id: str):
+        row = get_lesson_by_share_token(token)
+        if row is None:
+            return jsonify({"ok": False, "error": "Link de partilha inválido ou expirado."}), 404
+        expected = str(row.get("youtube_video_id") or "").strip()
+        vid = extract_youtube_video_id(video_id)
+        if not expected or not vid or vid != expected:
+            return jsonify(
+                {"ok": False, "error": "Áudio não disponível nesta partilha."}
+            ), 404
+        result = resolve_youtube_audio(expected)
+        if not result.ok or not result.audio_url:
+            return jsonify(
+                {"ok": False, "error": result.error or "Áudio indisponível."}
+            ), 404
+        return redirect(result.audio_url, code=302)
+
+    @app.post("/api/lessons/<int:lesson_id>/share")
+    @require_login
+    def api_create_lesson_share(lesson_id: int):
+        payload = request.get_json(silent=True) or {}
+        rotate = bool(payload.get("rotate"))
+        uid = _uid()
+        if get_lesson(lesson_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+        saved = ensure_lesson_share_token(lesson_id, user_id=uid, rotate=rotate)
+        if saved is None:
+            return jsonify({"ok": False, "error": "Não foi possível criar o link."}), 500
+        token = saved["share_token"]
+        return jsonify(
+            {
+                "ok": True,
+                "share_token": token,
+                "path": f"/s/{token}",
+                "url": _absolute_share_url(token),
+            }
+        )
+
+    @app.delete("/api/lessons/<int:lesson_id>/share")
+    @require_login
+    def api_revoke_lesson_share(lesson_id: int):
+        uid = _uid()
+        if get_lesson(lesson_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+        revoke_lesson_share_token(lesson_id, user_id=uid)
+        return jsonify({"ok": True})
 
     @app.get("/api/auth/me")
     def api_auth_me():
@@ -440,14 +553,12 @@ def create_app() -> Flask:
             saved = patch_lesson_metadata(
                 lesson_id,
                 user_id=uid,
-                lyrics_en=str(existing.get("lyrics_en") or ""),
+                lyrics_en=existing["lyrics_en"],
                 title_hint=existing.get("title_hint") or title_out or None,
                 artist_hint=existing.get("artist_hint") or artist_out or None,
                 lesson=lesson_obj,
             )
-            lesson_out = lesson_obj
-            if saved is None:
-                return jsonify({"ok": False, "error": "Cifra encontrada, mas falhou ao guardar na lição."}), 500
+            lesson_out = get_lesson(lesson_id, user_id=uid)
 
         return jsonify(
             {
@@ -455,13 +566,183 @@ def create_app() -> Flask:
                 "cifra": cifra_text,
                 "title": title_out,
                 "artist": artist_out,
-                "from_cache": from_cache,
                 "source": source,
+                "from_cache": from_cache,
                 "candidates": candidates,
                 "saved": saved,
                 "lesson": lesson_out,
             }
         )
+
+    @app.post("/api/youtube/search")
+    @require_login
+    def api_youtube_search():
+        payload = request.get_json(silent=True) or {}
+        title = str(payload.get("title") or "").strip()
+        artist = str(payload.get("artist") or "").strip()
+        force = bool(payload.get("force"))
+        uid = _uid()
+        lesson_id: int | None = None
+        raw_id = payload.get("lesson_id")
+        if raw_id is not None and str(raw_id).strip() != "":
+            try:
+                lesson_id = int(raw_id)
+            except (TypeError, ValueError):
+                lesson_id = None
+
+        cached = None if force else find_shared_youtube(title, artist)
+        if cached:
+            video_id = cached["video_id"]
+            video_title = cached.get("video_title") or ""
+            channel_title = cached.get("channel_title") or ""
+            saved = None
+            if lesson_id is not None:
+                if get_lesson(lesson_id, user_id=uid) is None:
+                    return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+                saved = set_lesson_youtube(
+                    lesson_id,
+                    user_id=uid,
+                    video_id=video_id,
+                    video_title=video_title or None,
+                )
+            return jsonify(
+                {
+                    "ok": True,
+                    "video_id": video_id,
+                    "title": video_title,
+                    "channel_title": channel_title,
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "from_cache": True,
+                    "candidates": [
+                        {
+                            "video_id": video_id,
+                            "title": video_title or video_id,
+                            "channel_title": channel_title,
+                            "url": f"https://www.youtube.com/watch?v={video_id}",
+                        }
+                    ],
+                    "saved": saved,
+                }
+            )
+
+        result = search_youtube(title, artist)
+        if not result.ok or not result.video_id:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": result.error or "Nenhum vídeo encontrado.",
+                        "candidates": result.candidates or [],
+                    }
+                ),
+                404,
+            )
+
+        save_shared_youtube(
+            title=title,
+            artist=artist,
+            video_id=result.video_id,
+            video_title=result.title,
+            channel_title=result.channel_title,
+        )
+        saved = None
+        if lesson_id is not None:
+            if get_lesson(lesson_id, user_id=uid) is None:
+                return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+            saved = set_lesson_youtube(
+                lesson_id,
+                user_id=uid,
+                video_id=result.video_id,
+                video_title=result.title,
+            )
+
+        return jsonify(
+            {
+                "ok": True,
+                "video_id": result.video_id,
+                "title": result.title,
+                "channel_title": result.channel_title,
+                "url": f"https://www.youtube.com/watch?v={result.video_id}",
+                "from_cache": False,
+                "candidates": result.candidates or [],
+                "saved": saved,
+            }
+        )
+
+    @app.patch("/api/lessons/<int:lesson_id>/youtube")
+    @require_login
+    def api_set_lesson_youtube(lesson_id: int):
+        payload = request.get_json(silent=True) or {}
+        uid = _uid()
+        if get_lesson(lesson_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+
+        clear = bool(payload.get("clear"))
+        if clear:
+            saved = set_lesson_youtube(
+                lesson_id, user_id=uid, video_id=None, video_title=None
+            )
+            return jsonify({"ok": True, **(saved or {"id": lesson_id, "youtube_video_id": None})})
+
+        raw = payload.get("url") or payload.get("video_id") or ""
+        video_id = extract_youtube_video_id(str(raw))
+        if not video_id:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "Indique um link YouTube válido ou um video id.",
+                }
+            ), 400
+        video_title = str(payload.get("title") or payload.get("video_title") or "").strip() or None
+        saved = set_lesson_youtube(
+            lesson_id,
+            user_id=uid,
+            video_id=video_id,
+            video_title=video_title,
+        )
+        if saved is None:
+            return jsonify({"ok": False, "error": "Não foi possível guardar."}), 500
+        return jsonify({"ok": True, **saved, "url": f"https://www.youtube.com/watch?v={video_id}"})
+
+    @app.post("/api/youtube/audio")
+    @require_login
+    def api_youtube_audio():
+        """Resolve stream de áudio (sem vídeo) para tocar na Aula."""
+        payload = request.get_json(silent=True) or {}
+        video_id = extract_youtube_video_id(
+            str(payload.get("video_id") or payload.get("url") or "")
+        )
+        if not video_id:
+            return jsonify({"ok": False, "error": "Indique um video_id ou URL YouTube."}), 400
+        result = resolve_youtube_audio(video_id)
+        if not result.ok or not result.audio_url:
+            return jsonify(
+                {"ok": False, "error": result.error or "Áudio indisponível."}
+            ), 404
+        return jsonify(
+            {
+                "ok": True,
+                "video_id": video_id,
+                "title": result.title,
+                "mime": result.mime,
+                "ext": result.ext,
+                # URL proxied: o browser pede ao Trusicas, que redireciona ao CDN.
+                "play_url": f"/api/youtube/media/{video_id}",
+            }
+        )
+
+    @app.get("/api/youtube/media/<video_id>")
+    @require_login
+    def api_youtube_media(video_id: str):
+        vid = extract_youtube_video_id(video_id)
+        if not vid:
+            return jsonify({"ok": False, "error": "video_id inválido."}), 400
+        result = resolve_youtube_audio(vid)
+        if not result.ok or not result.audio_url:
+            return jsonify(
+                {"ok": False, "error": result.error or "Áudio indisponível."}
+            ), 404
+        return redirect(result.audio_url, code=302)
 
     @app.post("/api/generate")
     @require_login
@@ -650,6 +931,15 @@ def create_app() -> Flask:
         playlist_id = _parse_playlist_id_arg()
         if playlist_id is not None and get_playlist(playlist_id, user_id=uid) is None:
             return jsonify({"ok": False, "error": "Lista não encontrada."}), 404
+        progress_raw = request.args.get("progress")
+        progress_filter = parse_progress_filter(progress_raw)
+        if progress_raw is not None and str(progress_raw).strip() and progress_filter == []:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "Progresso inválido. Use: aprender, aprendendo, ja_sei.",
+                }
+            ), 400
         flat = request.args.get("flat", "").strip().lower() in {"1", "true", "yes"}
         if flat:
             try:
@@ -657,7 +947,11 @@ def create_app() -> Flask:
             except ValueError:
                 offset = 0
             rows = list_lessons(
-                user_id=uid, limit=limit, offset=offset, playlist_id=playlist_id
+                user_id=uid,
+                limit=limit,
+                offset=offset,
+                playlist_id=playlist_id,
+                progress=progress_filter,
             )
             return jsonify(
                 {
@@ -670,10 +964,12 @@ def create_app() -> Flask:
                             "artist_hint": r.artist_hint,
                             "model": r.model,
                             "lyrics_preview": r.lyrics_preview,
+                            "progress": r.progress,
                         }
                         for r in rows
                     ],
                     "playlist_id": playlist_id,
+                    "progress": progress_filter,
                 }
             )
         q = request.args.get("q", "").strip()
@@ -682,6 +978,7 @@ def create_app() -> Flask:
             limit=limit,
             search=q or None,
             playlist_id=playlist_id,
+            progress=progress_filter,
         )
         return jsonify(
             {
@@ -690,6 +987,7 @@ def create_app() -> Flask:
                 "total": total,
                 "query": q,
                 "playlist_id": playlist_id,
+                "progress": progress_filter,
             }
         )
 
@@ -804,6 +1102,33 @@ def create_app() -> Flask:
         if row is None:
             return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
         return jsonify({"ok": True, **row})
+
+    @app.patch("/api/lessons/<int:lesson_id>/progress")
+    @require_login
+    def api_set_lesson_progress(lesson_id: int):
+        payload = request.get_json(silent=True) or {}
+        uid = _uid()
+        if get_lesson(lesson_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+        try:
+            saved = set_lesson_progress(
+                lesson_id, user_id=uid, progress=str(payload.get("progress") or "")
+            )
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        if saved is None:
+            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+        return jsonify({"ok": True, **saved})
+
+    @app.post("/api/lessons/<int:lesson_id>/mark-learning")
+    @require_login
+    def api_mark_lesson_learning(lesson_id: int):
+        """Ao abrir a aula: se ainda estava em «aprender», passa a «aprendendo»."""
+        uid = _uid()
+        result = mark_lesson_learning_if_new(lesson_id, user_id=uid)
+        if result is None:
+            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+        return jsonify({"ok": True, **result})
 
     @app.delete("/api/lessons/<int:lesson_id>")
     @require_login
