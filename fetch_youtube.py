@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +17,8 @@ USER_AGENT = "Trusicas/1.0 (educational lyrics lesson app)"
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _PROJECT_ROOT = Path(__file__).resolve().parent
+_AUDIO_CACHE_DIR = _PROJECT_ROOT / "data" / "yt_audio"
+_ENV_COOKIES_PATH = _PROJECT_ROOT / "data" / ".youtube.cookies.from_env.txt"
 
 # Clientes yt-dlp — em VPS o «web» costuma pedir login anti-bot; android/ios/tv falham menos.
 _PLAYER_CLIENT_ATTEMPTS: tuple[tuple[str, ...], ...] = (
@@ -23,12 +27,18 @@ _PLAYER_CLIENT_ATTEMPTS: tuple[tuple[str, ...], ...] = (
     ("mweb", "web"),
 )
 
+# Instâncias públicas (falham com frequência; só fallback).
+_PIPED_STREAM_APIS = (
+    "https://pipedapi.kavin.rocks/streams/{vid}",
+    "https://api.piped.private.coffee/streams/{vid}",
+    "https://pipedapi.reallyaweso.me/streams/{vid}",
+)
+
 _BOT_BLOCK_HINT = (
-    "O YouTube bloqueou este servidor (anti-bot / IP de datacenter). "
-    "Exporte cookies de uma conta YouTube (formato Netscape) para "
-    "data/youtube.cookies.txt no servidor, defina "
-    "YOUTUBE_COOKIES_FILE=/app/data/youtube.cookies.txt no .env e reinicie o contentor. "
-    "Guia: https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies"
+    "O YouTube bloqueou o IP deste servidor. No PC (com YouTube aberto e logado), "
+    "exporte cookies Netscape e cole no .env de produção como YOUTUBE_COOKIES_B64 "
+    "(uma só linha). Depois: docker compose up -d --build. "
+    "PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes('cookies.txt'))"
 )
 
 
@@ -276,6 +286,7 @@ def search_youtube(title: str, artist: str, *, max_results: int = 8) -> YoutubeS
 class YoutubeAudioResult:
     ok: bool
     audio_url: str | None = None
+    local_path: str | None = None
     mime: str | None = None
     title: str | None = None
     ext: str | None = None
@@ -286,15 +297,63 @@ _audio_url_cache: dict[str, tuple[float, YoutubeAudioResult]] = {}
 _AUDIO_CACHE_TTL_S = 45 * 60
 
 
+def _cookies_text_from_env() -> str | None:
+    """Lê cookies Netscape a partir do .env (B64 ou texto com \\n)."""
+    ensure_env_loaded()
+    b64 = (os.getenv("YOUTUBE_COOKIES_B64") or "").strip().strip('"').strip("'")
+    if b64:
+        compact = "".join(b64.split())
+        try:
+            decoded = base64.b64decode(compact, validate=False)
+            text = decoded.decode("utf-8", errors="replace").strip()
+            if text:
+                return text
+        except Exception:
+            pass
+    raw = (os.getenv("YOUTUBE_COOKIES") or "").strip().strip('"').strip("'")
+    if raw:
+        return raw.replace("\\n", "\n").strip()
+    return None
+
+
+def _materialize_env_cookies() -> str | None:
+    """Escreve cookies do .env para um ficheiro interno (o utilizador não cria nada na VPS)."""
+    text = _cookies_text_from_env()
+    if not text:
+        return None
+    if "youtube.com" not in text.lower() and "# netscape" not in text.lower():
+        # Ainda assim tentar — alguns exports mínimos podem variar
+        pass
+    try:
+        _ENV_COOKIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        prev = (
+            _ENV_COOKIES_PATH.read_text(encoding="utf-8")
+            if _ENV_COOKIES_PATH.is_file()
+            else None
+        )
+        if prev != text:
+            _ENV_COOKIES_PATH.write_text(text, encoding="utf-8")
+            try:
+                os.chmod(_ENV_COOKIES_PATH, 0o600)
+            except OSError:
+                pass
+        return str(_ENV_COOKIES_PATH.resolve())
+    except OSError:
+        return None
+
+
 def _resolve_cookies_file() -> str | None:
-    """Caminho Netscape cookies, se existir (env ou data/youtube.cookies.txt)."""
+    """Prioridade: cookies do .env → ficheiro configurado → data/youtube.cookies.txt."""
+    from_env = _materialize_env_cookies()
+    if from_env:
+        return from_env
+
     settings = get_youtube_settings()
     configured = (settings.get("cookies_file") or "").strip()
     candidates: list[Path] = []
     if configured:
         candidates.append(Path(configured))
     candidates.append(_PROJECT_ROOT / "data" / "youtube.cookies.txt")
-    # Dentro do contentor Docker o cwd/app costuma ser /app
     candidates.append(Path("/app/data/youtube.cookies.txt"))
     seen: set[str] = set()
     for path in candidates:
@@ -311,6 +370,11 @@ def _resolve_cookies_file() -> str | None:
     return None
 
 
+def _youtube_proxy() -> str | None:
+    proxy = (get_youtube_settings().get("proxy") or "").strip()
+    return proxy or None
+
+
 def _is_bot_block_error(message: str) -> bool:
     low = message.lower()
     return (
@@ -318,6 +382,7 @@ def _is_bot_block_error(message: str) -> bool:
         or "not a bot" in low
         or "cookies-from-browser" in low
         or "use --cookies" in low
+        or "login_required" in low
     )
 
 
@@ -364,23 +429,33 @@ def _mime_for_ext(ext: str | None) -> str | None:
     return None
 
 
-def resolve_youtube_audio(video_id: str) -> YoutubeAudioResult:
-    """
-    Resolve um URL directo de áudio (m4a/webm) para o videoId, via yt-dlp.
-    Usado pelo player HTML5 na Aula — sem iframe do YouTube.
-    Em VPS, use cookies Netscape (YOUTUBE_COOKIES_FILE) se o YouTube pedir login anti-bot.
-    """
-    import time
+def _find_cached_audio(vid: str) -> Path | None:
+    if not _AUDIO_CACHE_DIR.is_dir():
+        return None
+    matches = sorted(
+        (
+            p
+            for p in _AUDIO_CACHE_DIR.glob(f"{vid}.*")
+            if p.is_file() and p.stat().st_size > 1024 and not p.name.endswith(".part")
+        ),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return matches[0] if matches else None
 
-    vid = str(video_id or "").strip()
-    if not _VIDEO_ID_RE.fullmatch(vid):
-        return YoutubeAudioResult(ok=False, error="video_id inválido.")
 
-    now = time.time()
-    cached = _audio_url_cache.get(vid)
-    if cached and cached[0] > now and cached[1].ok and cached[1].audio_url:
-        return cached[1]
+def _result_from_cache(path: Path, *, title: str | None = None) -> YoutubeAudioResult:
+    ext = path.suffix.lstrip(".").lower() or None
+    return YoutubeAudioResult(
+        ok=True,
+        local_path=str(path.resolve()),
+        mime=_mime_for_ext(ext),
+        title=title,
+        ext=ext,
+    )
 
+
+def _download_with_ytdlp(vid: str) -> YoutubeAudioResult:
     try:
         import yt_dlp
     except ImportError:
@@ -391,8 +466,12 @@ def resolve_youtube_audio(video_id: str) -> YoutubeAudioResult:
 
     page_url = f"https://www.youtube.com/watch?v={vid}"
     cookies_file = _resolve_cookies_file()
+    proxy = _youtube_proxy()
     last_error = ""
     saw_bot_block = False
+
+    _AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    outtmpl = str(_AUDIO_CACHE_DIR / f"{vid}.%(ext)s")
 
     for clients in _PLAYER_CLIENT_ATTEMPTS:
         ydl_opts: dict[str, Any] = {
@@ -400,49 +479,56 @@ def resolve_youtube_audio(video_id: str) -> YoutubeAudioResult:
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
-            "skip_download": True,
+            "outtmpl": outtmpl,
+            "overwrites": True,
             "extractor_args": {"youtube": {"player_client": list(clients)}},
         }
         if cookies_file:
             ydl_opts["cookiefile"] = cookies_file
+        if proxy:
+            ydl_opts["proxy"] = proxy
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(page_url, download=False)
+                info = ydl.extract_info(page_url, download=True)
         except Exception as e:
             last_error = str(e)
             if _is_bot_block_error(last_error):
                 saw_bot_block = True
+            # Limpar leftovers .part
+            for junk in _AUDIO_CACHE_DIR.glob(f"{vid}.*"):
+                if junk.suffix == ".part" or junk.stat().st_size < 512:
+                    try:
+                        junk.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             continue
 
-        if not isinstance(info, dict):
-            last_error = "Resposta inválida ao resolver o áudio."
-            continue
+        cached = _find_cached_audio(vid)
+        if cached:
+            title = None
+            if isinstance(info, dict):
+                title = str(info.get("title") or "").strip() or None
+            return _result_from_cache(cached, title=title)
 
-        audio_url, ext = _pick_audio_url(info)
-        if not audio_url:
-            last_error = "Não foi encontrado um stream de áudio para este vídeo."
-            continue
+        # download=True por vezes só devolve info; tentar URL + httpx
+        if isinstance(info, dict):
+            audio_url, ext = _pick_audio_url(info)
+            title = str(info.get("title") or "").strip() or None
+            if audio_url:
+                saved = _http_download_audio(vid, audio_url, ext_hint=ext)
+                if saved.ok:
+                    saved.title = title or saved.title
+                    return saved
+        last_error = "yt-dlp não gravou o ficheiro de áudio."
 
-        title = str(info.get("title") or "").strip() or None
-        result = YoutubeAudioResult(
-            ok=True,
-            audio_url=audio_url,
-            mime=_mime_for_ext(ext),
-            title=title,
-            ext=ext,
-        )
-        _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
-        return result
-
-    if saw_bot_block and not cookies_file:
+    if saw_bot_block and not cookies_file and not proxy:
         return YoutubeAudioResult(ok=False, error=_BOT_BLOCK_HINT)
-    if saw_bot_block and cookies_file:
+    if saw_bot_block:
         return YoutubeAudioResult(
             ok=False,
             error=(
-                "O YouTube ainda bloqueia o áudio apesar dos cookies. "
-                "Reexporte cookies frescos (conta logada no YouTube, sem 2FA challenge "
-                "pendente), confirme o formato Netscape e reinicie o contentor. "
+                "O YouTube ainda bloqueia o áudio. Actualize YOUTUBE_COOKIES_B64 "
+                "com cookies frescos (conta logada no YouTube) e faça redeploy. "
                 f"Detalhe: {last_error}"
             ),
         )
@@ -450,4 +536,138 @@ def resolve_youtube_audio(video_id: str) -> YoutubeAudioResult:
         ok=False,
         error=f"Não foi possível obter o áudio deste vídeo: {last_error or 'erro desconhecido'}",
     )
+
+
+def _http_download_audio(
+    vid: str, audio_url: str, *, ext_hint: str | None = None
+) -> YoutubeAudioResult:
+    ext = (ext_hint or "m4a").lstrip(".").lower() or "m4a"
+    if ext == "mp4":
+        ext = "m4a"
+    dest = _AUDIO_CACHE_DIR / f"{vid}.{ext}"
+    _AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
+    try:
+        with httpx.Client(timeout=120.0, follow_redirects=True, headers=headers) as client:
+            with client.stream("GET", audio_url) as resp:
+                if resp.status_code >= 400:
+                    return YoutubeAudioResult(
+                        ok=False,
+                        error=f"Falha ao descarregar áudio (HTTP {resp.status_code}).",
+                    )
+                tmp = dest.with_suffix(dest.suffix + ".part")
+                with tmp.open("wb") as fh:
+                    for chunk in resp.iter_bytes(chunk_size=64 * 1024):
+                        if chunk:
+                            fh.write(chunk)
+                tmp.replace(dest)
+    except httpx.HTTPError as e:
+        return YoutubeAudioResult(ok=False, error=f"Falha de rede ao descarregar áudio: {e}")
+    if not dest.is_file() or dest.stat().st_size < 1024:
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return YoutubeAudioResult(ok=False, error="Áudio descarregado está vazio.")
+    return _result_from_cache(dest)
+
+
+def _download_via_piped(vid: str) -> YoutubeAudioResult:
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    last_error = ""
+    with httpx.Client(timeout=25.0, follow_redirects=True, headers=headers) as client:
+        for template in _PIPED_STREAM_APIS:
+            url = template.format(vid=vid)
+            try:
+                r = client.get(url)
+            except httpx.HTTPError as e:
+                last_error = str(e)
+                continue
+            if r.status_code >= 400:
+                last_error = f"HTTP {r.status_code} em {url}"
+                continue
+            try:
+                payload = r.json()
+            except Exception:
+                last_error = "JSON inválido (Piped)"
+                continue
+            streams = payload.get("audioStreams") if isinstance(payload, dict) else None
+            if not isinstance(streams, list) or not streams:
+                last_error = "Piped sem audioStreams"
+                continue
+            usable = [
+                s
+                for s in streams
+                if isinstance(s, dict) and str(s.get("url") or "").startswith("http")
+            ]
+            usable.sort(
+                key=lambda s: int(s.get("bitrate") or s.get("bitRate") or 0),
+                reverse=True,
+            )
+            if not usable:
+                continue
+            best = usable[0]
+            audio_url = str(best.get("url") or "").strip()
+            mime = str(best.get("mimeType") or best.get("type") or "").lower()
+            ext = "m4a"
+            if "webm" in mime or "opus" in mime:
+                ext = "webm"
+            elif "mpeg" in mime or "mp3" in mime:
+                ext = "mp3"
+            title = str(payload.get("title") or "").strip() or None
+            saved = _http_download_audio(vid, audio_url, ext_hint=ext)
+            if saved.ok:
+                saved.title = title or saved.title
+                if mime.startswith("audio/"):
+                    saved.mime = mime.split(";")[0].strip()
+                return saved
+            last_error = saved.error or "download Piped falhou"
+    return YoutubeAudioResult(
+        ok=False,
+        error=last_error or "Nenhuma instância Piped disponível.",
+    )
+
+
+def resolve_youtube_audio(video_id: str) -> YoutubeAudioResult:
+    """
+    Garante áudio em cache local (data/yt_audio/) para o videoId.
+    Em VPS: defina YOUTUBE_COOKIES_B64 no .env (colar base64) — sem criar ficheiros à mão.
+    O browser recebe o ficheiro via /api/youtube/media (não depende do IP do CDN).
+    """
+    import time
+
+    vid = str(video_id or "").strip()
+    if not _VIDEO_ID_RE.fullmatch(vid):
+        return YoutubeAudioResult(ok=False, error="video_id inválido.")
+
+    now = time.time()
+    cached_mem = _audio_url_cache.get(vid)
+    if (
+        cached_mem
+        and cached_mem[0] > now
+        and cached_mem[1].ok
+        and cached_mem[1].local_path
+        and Path(cached_mem[1].local_path).is_file()
+    ):
+        return cached_mem[1]
+
+    on_disk = _find_cached_audio(vid)
+    if on_disk:
+        result = _result_from_cache(on_disk)
+        _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
+        return result
+
+    result = _download_with_ytdlp(vid)
+    if not result.ok:
+        piped = _download_via_piped(vid)
+        if piped.ok:
+            result = piped
+        elif _is_bot_block_error(result.error or "") and not _resolve_cookies_file():
+            result = YoutubeAudioResult(ok=False, error=_BOT_BLOCK_HINT)
+        elif not result.error:
+            result = piped
+
+    if result.ok and result.local_path:
+        _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
+    return result
 

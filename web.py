@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file
 
 from auth import (
     current_user,
@@ -137,7 +137,7 @@ def create_app() -> Flask:
                 {"ok": False, "error": "Áudio não disponível nesta partilha."}
             ), 404
         result = resolve_youtube_audio(expected)
-        if not result.ok or not result.audio_url:
+        if not result.ok or not result.local_path:
             return jsonify(
                 {"ok": False, "error": result.error or "Áudio indisponível."}
             ), 404
@@ -164,11 +164,17 @@ def create_app() -> Flask:
                 {"ok": False, "error": "Áudio não disponível nesta partilha."}
             ), 404
         result = resolve_youtube_audio(expected)
-        if not result.ok or not result.audio_url:
+        if not result.ok or not result.local_path:
             return jsonify(
                 {"ok": False, "error": result.error or "Áudio indisponível."}
             ), 404
-        return redirect(result.audio_url, code=302)
+        return send_file(
+            result.local_path,
+            mimetype=result.mime or "audio/mp4",
+            conditional=True,
+            as_attachment=False,
+            download_name=f"{expected}.{result.ext or 'm4a'}",
+        )
 
     @app.post("/api/lessons/<int:lesson_id>/share")
     @require_login
@@ -715,7 +721,7 @@ def create_app() -> Flask:
         if not video_id:
             return jsonify({"ok": False, "error": "Indique um video_id ou URL YouTube."}), 400
         result = resolve_youtube_audio(video_id)
-        if not result.ok or not result.audio_url:
+        if not result.ok or not result.local_path:
             return jsonify(
                 {"ok": False, "error": result.error or "Áudio indisponível."}
             ), 404
@@ -726,7 +732,7 @@ def create_app() -> Flask:
                 "title": result.title,
                 "mime": result.mime,
                 "ext": result.ext,
-                # URL proxied: o browser pede ao Trusicas, que redireciona ao CDN.
+                # Ficheiro servido pelo Trusicas (cache em data/yt_audio/).
                 "play_url": f"/api/youtube/media/{video_id}",
             }
         )
@@ -738,11 +744,17 @@ def create_app() -> Flask:
         if not vid:
             return jsonify({"ok": False, "error": "video_id inválido."}), 400
         result = resolve_youtube_audio(vid)
-        if not result.ok or not result.audio_url:
+        if not result.ok or not result.local_path:
             return jsonify(
                 {"ok": False, "error": result.error or "Áudio indisponível."}
             ), 404
-        return redirect(result.audio_url, code=302)
+        return send_file(
+            result.local_path,
+            mimetype=result.mime or "audio/mp4",
+            conditional=True,
+            as_attachment=False,
+            download_name=f"{vid}.{result.ext or 'm4a'}",
+        )
 
     @app.post("/api/generate")
     @require_login

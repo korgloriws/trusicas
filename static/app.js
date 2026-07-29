@@ -2687,30 +2687,23 @@ function destroyYoutubePlayer() {
   studyYoutubeTitle = "";
   studyYoutubeCandidates = [];
   const host = $("youtube-player");
-  if (host) {
-    const audio = host.querySelector("audio");
-    if (audio) {
-      try {
-        audio.pause();
-        audio.removeAttribute("src");
-        audio.load();
-      } catch (_e) {
-        /* ignore */
-      }
-    }
-    host.innerHTML = "";
-  }
+  if (host) host.innerHTML = "";
   const shell = $("youtube-player-shell");
   if (shell) shell.classList.add("hidden");
   const label = $("youtube-track-label");
   if (label) label.textContent = "";
+  const openLink = $("youtube-open-link");
+  if (openLink) {
+    openLink.classList.add("hidden");
+    openLink.removeAttribute("href");
+  }
   clearYoutubeCandidates();
   setYoutubePasteVisible(false);
   setYoutubeStatus("");
   showStudyYoutubePanel(false);
 }
 
-async function mountYoutubePlayer(videoId, videoTitle) {
+function mountYoutubePlayer(videoId, videoTitle) {
   const id = String(videoId || "").trim();
   if (!id) return false;
   studyYoutubeId = id;
@@ -2725,56 +2718,36 @@ async function mountYoutubePlayer(videoId, videoTitle) {
       : `Faixa · ${id}`;
   }
 
+  const watchUrl = "https://www.youtube.com/watch?v=" + encodeURIComponent(id);
+  const openLink = $("youtube-open-link");
+  if (openLink) {
+    openLink.href = watchUrl;
+    openLink.classList.remove("hidden");
+  }
+
   const host = $("youtube-player");
   if (!host) return false;
   host.innerHTML = "";
 
-  setYoutubeStatus("A carregar áudio…");
-  try {
-    const audioEndpoint = shareMode
-      ? "/api/share/" + encodeURIComponent(String(shareToken)) + "/audio"
-      : "/api/youtube/audio";
-    const res = await apiFetch(audioEndpoint, {
-      method: "POST",
-      body: JSON.stringify({ video_id: id }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.ok || !data.play_url) {
-      setYoutubeStatus(data.error || "Não foi possível carregar o áudio.");
-      if (!shareMode) setYoutubePasteVisible(true);
-      return false;
-    }
-    if (data.title && !studyYoutubeTitle) {
-      studyYoutubeTitle = String(data.title);
-      if (label) label.textContent = studyYoutubeTitle;
-    }
+  // Player no browser do utilizador (IP residencial) — a VPS só guarda o video_id.
+  // A Data API do YouTube não fornece stream de áudio; por isso não usamos yt-dlp aqui.
+  const iframe = document.createElement("iframe");
+  iframe.src =
+    "https://www.youtube.com/embed/" +
+    encodeURIComponent(id) +
+    "?rel=0&modestbranding=1&playsinline=1";
+  iframe.title = studyYoutubeTitle || "YouTube";
+  iframe.allow =
+    "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+  iframe.allowFullscreen = true;
+  iframe.referrerPolicy = "strict-origin-when-cross-origin";
+  iframe.loading = "lazy";
+  iframe.setAttribute("frameborder", "0");
+  host.appendChild(iframe);
 
-    const audio = document.createElement("audio");
-    audio.id = "youtube-audio";
-    audio.className = "youtube-audio";
-    audio.controls = true;
-    audio.preload = "metadata";
-    audio.controlsList = "nodownload";
-    audio.src = data.play_url;
-    audio.addEventListener("error", () => {
-      setYoutubeStatus(
-        shareMode
-          ? "Falha ao reproduzir o áudio desta partilha."
-          : "Falha ao reproduzir este áudio. Use «Buscar áudio» para outra versão ou cole um link."
-      );
-      if (!shareMode) setYoutubePasteVisible(true);
-    });
-    audio.addEventListener("loadedmetadata", () => {
-      setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
-      if (!shareMode) setYoutubePasteVisible(false);
-    });
-    host.appendChild(audio);
-    return true;
-  } catch (e) {
-    setYoutubeStatus(String(e));
-    setYoutubePasteVisible(true);
-    return false;
-  }
+  setYoutubeStatus("Player pronto — ouve e acompanha a tradução.");
+  if (!shareMode) setYoutubePasteVisible(false);
+  return true;
 }
 
 function renderYoutubeCandidates(candidates, { excludeId = null } = {}) {

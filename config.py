@@ -147,6 +147,8 @@ def get_youtube_settings() -> dict[str, str]:
         .strip()
         .lower()
         or "pt",
-        # Netscape cookies — mitiga «Sign in to confirm you’re not a bot» em VPS
+        # Opcional: caminho a ficheiro Netscape (raro — preferir YOUTUBE_COOKIES_B64 no .env)
         "cookies_file": (os.getenv("YOUTUBE_COOKIES_FILE") or "").strip(),
+        # Proxy HTTP/SOCKS para o yt-dlp (útil em VPS com IP de datacenter)
+        "proxy": (os.getenv("YOUTUBE_PROXY") or "").strip(),
     }

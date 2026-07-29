@@ -311,7 +311,7 @@
         <div class="youtube-head">
           <div class="youtube-head-copy">
             <h3 class="youtube-title">Áudio da música</h3>
-            <p class="youtube-desc">Ouve na própria aula e acompanha a tradução. Pausa ou salta para o trecho difícil na barra do player.</p>
+            <p class="youtube-desc">O player abre no teu browser. A VPS só encontra o vídeo pela API — sem cookies nem download.</p>
           </div>
           <div class="youtube-head-actions">
             <button type="button" id="btn-youtube-search" class="btn btn-secondary btn-sm">Buscar áudio</button>
@@ -319,10 +319,20 @@
           </div>
         </div>
         <div id="youtube-player-shell" class="youtube-player-shell hidden">
-          <div class="youtube-audio-frame">
+          <div class="youtube-player-frame">
             <div id="youtube-player"></div>
           </div>
-          <p id="youtube-track-label" class="youtube-track-label muted"></p>
+          <div class="youtube-track-row">
+            <p id="youtube-track-label" class="youtube-track-label muted"></p>
+            <a
+              id="youtube-open-link"
+              class="youtube-open-link hidden"
+              href="#"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Abrir no YouTube</a
+            >
+          </div>
         </div>
         <div id="youtube-url-row" class="youtube-url-row hidden">
           <label class="visually-hidden" for="youtube-url-input">Link do YouTube</label>
