@@ -30,8 +30,12 @@ _PLAYER_CLIENT_ATTEMPTS: tuple[tuple[str, ...], ...] = (
 # Instâncias públicas (falham com frequência; só fallback).
 _PIPED_STREAM_APIS = (
     "https://pipedapi.kavin.rocks/streams/{vid}",
+    "https://pipedapi.leptons.xyz/streams/{vid}",
+    "https://pipedapi.adminforge.de/streams/{vid}",
     "https://api.piped.private.coffee/streams/{vid}",
     "https://pipedapi.reallyaweso.me/streams/{vid}",
+    "https://pipedapi.r4fo.com/streams/{vid}",
+    "https://api.piped.yt/streams/{vid}",
 )
 
 _BOT_BLOCK_HINT = (

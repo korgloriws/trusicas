@@ -2106,6 +2106,7 @@ html[data-theme="light"] .playlist-bar {
 }
 
 .youtube-audio-frame {
+  position: relative;
   width: 100%;
   max-width: 52rem;
   padding: 0.85rem 1rem;
@@ -2126,40 +2127,53 @@ html[data-theme="light"] .playlist-bar {
   height: 2.75rem;
 }
 
-.youtube-cookies-panel {
-  margin-top: 0.75rem;
-  padding: 0.85rem 1rem;
-  border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--accent-hot) 30%, var(--border));
-  background: color-mix(in srgb, var(--accent-hot) 8%, var(--bg-elevated));
+.youtube-engine {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
 }
 
-.youtube-cookies-title {
-  margin: 0 0 0.35rem;
-  font-size: 0.92rem;
-  font-weight: 700;
-}
-
-.youtube-cookies-help {
-  margin: 0 0 0.65rem;
-  font-size: 0.8rem;
-  line-height: 1.45;
-}
-
-.youtube-cookies-input {
-  width: 100%;
-  min-height: 7rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.72rem;
-  line-height: 1.35;
-  resize: vertical;
-}
-
-.youtube-cookies-actions {
+.ya-controls {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  margin-top: 0.55rem;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+}
+
+.ya-play {
+  flex: 0 0 auto;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: color-mix(in srgb, var(--accent-hot) 16%, var(--bg-elevated));
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ya-play:hover {
+  background: color-mix(in srgb, var(--accent-hot) 28%, var(--bg-elevated));
+}
+
+.ya-seek {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent-hot);
+  height: 0.35rem;
+}
+
+.ya-time {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted, #8b93a7);
+  white-space: nowrap;
 }
 
 .youtube-track-label {
@@ -2226,7 +2240,6 @@ body.share-mode #btn-study-new-lesson,
 body.share-mode #btn-study-library,
 body.share-mode #btn-study-share,
 body.share-mode .youtube-head-actions,
-body.share-mode .youtube-cookies-panel,
 body.share-mode #training-mode-banner,
 body.share-mode .hero-toolbar .segmented[aria-label="Navegação principal"],
 body.share-mode #view-create,
