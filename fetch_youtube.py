@@ -35,10 +35,10 @@ _PIPED_STREAM_APIS = (
 )
 
 _BOT_BLOCK_HINT = (
-    "O YouTube bloqueou o IP deste servidor. No PC (com YouTube aberto e logado), "
-    "exporte cookies Netscape e cole no .env de produção como YOUTUBE_COOKIES_B64 "
-    "(uma só linha). Depois: docker compose up -d --build. "
-    "PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes('cookies.txt'))"
+    "O YouTube bloqueou o IP deste servidor. Cole abaixo o conteúdo do cookies.txt "
+    "(no PC: extensão «Get cookies.txt LOCALLY» em youtube.com → Export → abrir o ficheiro "
+    "no Bloco de notas → copiar tudo → colar aqui) e carregue em Guardar. "
+    "Depois volte a pedir o áudio."
 )
 
 
@@ -343,10 +343,13 @@ def _materialize_env_cookies() -> str | None:
 
 
 def _resolve_cookies_file() -> str | None:
-    """Prioridade: cookies do .env → ficheiro configurado → data/youtube.cookies.txt."""
+    """Prioridade: .env → ficheiro guardado na app → caminhos configurados."""
     from_env = _materialize_env_cookies()
     if from_env:
         return from_env
+
+    if _ENV_COOKIES_PATH.is_file() and _ENV_COOKIES_PATH.stat().st_size > 0:
+        return str(_ENV_COOKIES_PATH.resolve())
 
     settings = get_youtube_settings()
     configured = (settings.get("cookies_file") or "").strip()
@@ -368,6 +371,50 @@ def _resolve_cookies_file() -> str | None:
         if resolved.is_file() and resolved.stat().st_size > 0:
             return key
     return None
+
+
+def youtube_cookies_configured() -> bool:
+    return _resolve_cookies_file() is not None
+
+
+def clear_youtube_audio_mem_cache() -> None:
+    _audio_url_cache.clear()
+
+
+def save_youtube_cookies_text(raw: str) -> tuple[bool, str]:
+    """
+    Guarda cookies Netscape colados na UI (sem criar ficheiros à mão na VPS).
+    """
+    text = str(raw or "").strip()
+    if len(text) < 40:
+        return False, "Cole o conteúdo completo do cookies.txt (está demasiado curto)."
+    low = text.lower()
+    if "youtube.com" not in low and ".youtube.com" not in low:
+        return (
+            False,
+            "O texto não parece cookies do YouTube. Exporte em youtube.com com a extensão.",
+        )
+    try:
+        _ENV_COOKIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _ENV_COOKIES_PATH.write_text(text + ("" if text.endswith("\n") else "\n"), encoding="utf-8")
+        try:
+            os.chmod(_ENV_COOKIES_PATH, 0o600)
+        except OSError:
+            pass
+    except OSError as e:
+        return False, f"Não foi possível guardar os cookies: {e}"
+    clear_youtube_audio_mem_cache()
+    return True, "Cookies guardados. Pode carregar o áudio outra vez."
+
+
+def clear_youtube_cookies_file() -> tuple[bool, str]:
+    try:
+        if _ENV_COOKIES_PATH.is_file():
+            _ENV_COOKIES_PATH.unlink()
+    except OSError as e:
+        return False, f"Não foi possível remover: {e}"
+    clear_youtube_audio_mem_cache()
+    return True, "Cookies removidos."
 
 
 def _youtube_proxy() -> str | None:

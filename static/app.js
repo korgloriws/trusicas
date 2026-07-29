@@ -2687,23 +2687,49 @@ function destroyYoutubePlayer() {
   studyYoutubeTitle = "";
   studyYoutubeCandidates = [];
   const host = $("youtube-player");
-  if (host) host.innerHTML = "";
+  if (host) {
+    const audio = host.querySelector("audio");
+    if (audio) {
+      try {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+    host.innerHTML = "";
+  }
   const shell = $("youtube-player-shell");
   if (shell) shell.classList.add("hidden");
   const label = $("youtube-track-label");
   if (label) label.textContent = "";
-  const openLink = $("youtube-open-link");
-  if (openLink) {
-    openLink.classList.add("hidden");
-    openLink.removeAttribute("href");
-  }
+  setYoutubeCookiesPanelVisible(false);
   clearYoutubeCandidates();
   setYoutubePasteVisible(false);
   setYoutubeStatus("");
   showStudyYoutubePanel(false);
 }
 
-function mountYoutubePlayer(videoId, videoTitle) {
+function setYoutubeCookiesPanelVisible(show) {
+  const panel = $("youtube-cookies-panel");
+  if (!panel) return;
+  panel.classList.toggle("hidden", !show);
+  if (show) showStudyYoutubePanel(true);
+}
+
+function youtubeNeedsCookies(data, message) {
+  if (data && data.needs_cookies) return true;
+  const m = String(message || (data && data.error) || "").toLowerCase();
+  return (
+    m.includes("bloqueou") ||
+    m.includes("cookies") ||
+    m.includes("not a bot") ||
+    m.includes("sign in")
+  );
+}
+
+async function mountYoutubePlayer(videoId, videoTitle) {
   const id = String(videoId || "").trim();
   if (!id) return false;
   studyYoutubeId = id;
@@ -2718,36 +2744,64 @@ function mountYoutubePlayer(videoId, videoTitle) {
       : `Faixa · ${id}`;
   }
 
-  const watchUrl = "https://www.youtube.com/watch?v=" + encodeURIComponent(id);
-  const openLink = $("youtube-open-link");
-  if (openLink) {
-    openLink.href = watchUrl;
-    openLink.classList.remove("hidden");
-  }
-
   const host = $("youtube-player");
   if (!host) return false;
   host.innerHTML = "";
 
-  // Player no browser do utilizador (IP residencial) — a VPS só guarda o video_id.
-  // A Data API do YouTube não fornece stream de áudio; por isso não usamos yt-dlp aqui.
-  const iframe = document.createElement("iframe");
-  iframe.src =
-    "https://www.youtube.com/embed/" +
-    encodeURIComponent(id) +
-    "?rel=0&modestbranding=1&playsinline=1";
-  iframe.title = studyYoutubeTitle || "YouTube";
-  iframe.allow =
-    "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
-  iframe.allowFullscreen = true;
-  iframe.referrerPolicy = "strict-origin-when-cross-origin";
-  iframe.loading = "lazy";
-  iframe.setAttribute("frameborder", "0");
-  host.appendChild(iframe);
+  setYoutubeStatus("A carregar áudio…");
+  try {
+    const audioEndpoint = shareMode
+      ? "/api/share/" + encodeURIComponent(String(shareToken)) + "/audio"
+      : "/api/youtube/audio";
+    const res = await apiFetch(audioEndpoint, {
+      method: "POST",
+      body: JSON.stringify({ video_id: id }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok || !data.play_url) {
+      const err = data.error || "Não foi possível carregar o áudio.";
+      setYoutubeStatus(err);
+      if (!shareMode && youtubeNeedsCookies(data, err)) {
+        setYoutubeCookiesPanelVisible(true);
+      }
+      if (!shareMode) setYoutubePasteVisible(true);
+      return false;
+    }
+    if (data.title && !studyYoutubeTitle) {
+      studyYoutubeTitle = String(data.title);
+      if (label) label.textContent = studyYoutubeTitle;
+    }
 
-  setYoutubeStatus("Player pronto — ouve e acompanha a tradução.");
-  if (!shareMode) setYoutubePasteVisible(false);
-  return true;
+    setYoutubeCookiesPanelVisible(false);
+    const audio = document.createElement("audio");
+    audio.id = "youtube-audio";
+    audio.className = "youtube-audio";
+    audio.controls = true;
+    audio.preload = "metadata";
+    audio.controlsList = "nodownload";
+    audio.src = data.play_url;
+    audio.addEventListener("error", () => {
+      setYoutubeStatus(
+        shareMode
+          ? "Falha ao reproduzir o áudio desta partilha."
+          : "Falha ao reproduzir este áudio. Use «Buscar áudio» para outra versão ou cole um link."
+      );
+      if (!shareMode) setYoutubePasteVisible(true);
+    });
+    audio.addEventListener("loadedmetadata", () => {
+      setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
+      if (!shareMode) setYoutubePasteVisible(false);
+    });
+    host.appendChild(audio);
+    return true;
+  } catch (e) {
+    setYoutubeStatus(String(e));
+    if (!shareMode) {
+      setYoutubePasteVisible(true);
+      setYoutubeCookiesPanelVisible(true);
+    }
+    return false;
+  }
 }
 
 function renderYoutubeCandidates(candidates, { excludeId = null } = {}) {
@@ -3372,10 +3426,45 @@ $("btn-youtube-apply-url")?.addEventListener("click", async () => {
       setYoutubePasteVisible(false);
     }
   } catch (e) {
-    setYoutubeStatus(String(e));
-    setYoutubePasteVisible(true);
+    setYoutubeStatus(String(e.message || e));
   }
 });
+
+$("btn-youtube-cookies-save")?.addEventListener("click", async () => {
+  if (!isLoggedIn) {
+    setYoutubeStatus("Inicie sessão para guardar cookies.");
+    return;
+  }
+  const text = ($("youtube-cookies-input")?.value || "").trim();
+  if (!text) {
+    setYoutubeStatus("Cole o conteúdo do cookies.txt.");
+    return;
+  }
+  setYoutubeStatus("A guardar cookies…");
+  try {
+    const res = await apiFetch("/api/youtube/cookies", {
+      method: "POST",
+      body: JSON.stringify({ cookies: text }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setYoutubeStatus(data.error || "Não foi possível guardar os cookies.");
+      return;
+    }
+    setYoutubeStatus(data.message || "Cookies guardados.");
+    if ($("youtube-cookies-input")) $("youtube-cookies-input").value = "";
+    if (studyYoutubeId) {
+      await mountYoutubePlayer(studyYoutubeId, studyYoutubeTitle);
+    }
+  } catch (e) {
+    setYoutubeStatus(String(e.message || e));
+  }
+});
+
+$("btn-youtube-cookies-hide")?.addEventListener("click", () => {
+  setYoutubeCookiesPanelVisible(false);
+});
+
 $("btn-another-random")?.addEventListener("click", () => spinRandomTraining());
 $("btn-exit-training")?.addEventListener("click", () => {
   clearTrainingMode();

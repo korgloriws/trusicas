@@ -18,7 +18,14 @@ from auth import (
 )
 from fetch_cifra import fetch_cifra
 from fetch_lyrics import fetch_lyrics
-from fetch_youtube import extract_youtube_video_id, resolve_youtube_audio, search_youtube
+from fetch_youtube import (
+    clear_youtube_cookies_file,
+    extract_youtube_video_id,
+    resolve_youtube_audio,
+    save_youtube_cookies_text,
+    search_youtube,
+    youtube_cookies_configured,
+)
 from generate import generate_lesson
 from store import (
     add_lesson_to_playlist,
@@ -722,8 +729,15 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "Indique um video_id ou URL YouTube."}), 400
         result = resolve_youtube_audio(video_id)
         if not result.ok or not result.local_path:
+            err = result.error or "Áudio indisponível."
             return jsonify(
-                {"ok": False, "error": result.error or "Áudio indisponível."}
+                {
+                    "ok": False,
+                    "error": err,
+                    "needs_cookies": (not youtube_cookies_configured())
+                    or ("bloqueou" in err.lower())
+                    or ("cookies" in err.lower()),
+                }
             ), 404
         return jsonify(
             {
@@ -736,6 +750,30 @@ def create_app() -> Flask:
                 "play_url": f"/api/youtube/media/{video_id}",
             }
         )
+
+    @app.get("/api/youtube/cookies/status")
+    @require_login
+    def api_youtube_cookies_status():
+        return jsonify({"ok": True, "configured": youtube_cookies_configured()})
+
+    @app.post("/api/youtube/cookies")
+    @require_login
+    def api_youtube_cookies_save():
+        """Cola cookies Netscape na UI — guarda em data/ (volume Docker)."""
+        payload = request.get_json(silent=True) or {}
+        raw = str(payload.get("cookies") or payload.get("text") or "")
+        ok, message = save_youtube_cookies_text(raw)
+        if not ok:
+            return jsonify({"ok": False, "error": message}), 400
+        return jsonify({"ok": True, "message": message, "configured": True})
+
+    @app.delete("/api/youtube/cookies")
+    @require_login
+    def api_youtube_cookies_clear():
+        ok, message = clear_youtube_cookies_file()
+        if not ok:
+            return jsonify({"ok": False, "error": message}), 500
+        return jsonify({"ok": True, "message": message, "configured": False})
 
     @app.get("/api/youtube/media/<video_id>")
     @require_login
