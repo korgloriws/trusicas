@@ -147,4 +147,6 @@ def get_youtube_settings() -> dict[str, str]:
         .strip()
         .lower()
         or "pt",
+        # Netscape cookies — mitiga «Sign in to confirm you’re not a bot» em VPS
+        "cookies_file": (os.getenv("YOUTUBE_COOKIES_FILE") or "").strip(),
     }

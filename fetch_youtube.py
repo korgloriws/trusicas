@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -13,6 +14,22 @@ YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 USER_AGENT = "Trusicas/1.0 (educational lyrics lesson app)"
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_PROJECT_ROOT = Path(__file__).resolve().parent
+
+# Clientes yt-dlp — em VPS o «web» costuma pedir login anti-bot; android/ios/tv falham menos.
+_PLAYER_CLIENT_ATTEMPTS: tuple[tuple[str, ...], ...] = (
+    ("android_music", "android", "ios"),
+    ("tv_embedded", "tv"),
+    ("mweb", "web"),
+)
+
+_BOT_BLOCK_HINT = (
+    "O YouTube bloqueou este servidor (anti-bot / IP de datacenter). "
+    "Exporte cookies de uma conta YouTube (formato Netscape) para "
+    "data/youtube.cookies.txt no servidor, defina "
+    "YOUTUBE_COOKIES_FILE=/app/data/youtube.cookies.txt no .env e reinicie o contentor. "
+    "Guia: https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies"
+)
 
 
 @dataclass
@@ -269,10 +286,89 @@ _audio_url_cache: dict[str, tuple[float, YoutubeAudioResult]] = {}
 _AUDIO_CACHE_TTL_S = 45 * 60
 
 
+def _resolve_cookies_file() -> str | None:
+    """Caminho Netscape cookies, se existir (env ou data/youtube.cookies.txt)."""
+    settings = get_youtube_settings()
+    configured = (settings.get("cookies_file") or "").strip()
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured))
+    candidates.append(_PROJECT_ROOT / "data" / "youtube.cookies.txt")
+    # Dentro do contentor Docker o cwd/app costuma ser /app
+    candidates.append(Path("/app/data/youtube.cookies.txt"))
+    seen: set[str] = set()
+    for path in candidates:
+        try:
+            resolved = path.expanduser().resolve()
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if resolved.is_file() and resolved.stat().st_size > 0:
+            return key
+    return None
+
+
+def _is_bot_block_error(message: str) -> bool:
+    low = message.lower()
+    return (
+        "sign in to confirm" in low
+        or "not a bot" in low
+        or "cookies-from-browser" in low
+        or "use --cookies" in low
+    )
+
+
+def _pick_audio_url(info: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Devolve (url, ext) a partir do info do yt-dlp."""
+    audio_url = str(info.get("url") or "").strip() or None
+    ext = str(info.get("ext") or "").strip().lower() or None
+    if audio_url:
+        return audio_url, ext
+
+    formats = info.get("formats") if isinstance(info.get("formats"), list) else []
+    audio_formats = [
+        f
+        for f in formats
+        if isinstance(f, dict)
+        and f.get("url")
+        and (f.get("acodec") not in (None, "none"))
+        and (f.get("vcodec") in (None, "none"))
+    ]
+    audio_formats.sort(
+        key=lambda f: (
+            int(f.get("abr") or 0),
+            int(f.get("tbr") or 0),
+        ),
+        reverse=True,
+    )
+    if not audio_formats:
+        return None, ext
+    best = audio_formats[0]
+    audio_url = str(best.get("url") or "").strip() or None
+    fmt_ext = str(best.get("ext") or "").strip().lower() or ext
+    return audio_url, fmt_ext
+
+
+def _mime_for_ext(ext: str | None) -> str | None:
+    if ext in {"m4a", "mp4"}:
+        return "audio/mp4"
+    if ext == "webm":
+        return "audio/webm"
+    if ext == "mp3":
+        return "audio/mpeg"
+    if ext in {"opus", "ogg"}:
+        return "audio/ogg"
+    return None
+
+
 def resolve_youtube_audio(video_id: str) -> YoutubeAudioResult:
     """
     Resolve um URL directo de áudio (m4a/webm) para o videoId, via yt-dlp.
     Usado pelo player HTML5 na Aula — sem iframe do YouTube.
+    Em VPS, use cookies Netscape (YOUTUBE_COOKIES_FILE) se o YouTube pedir login anti-bot.
     """
     import time
 
@@ -294,74 +390,64 @@ def resolve_youtube_audio(video_id: str) -> YoutubeAudioResult:
         )
 
     page_url = f"https://www.youtube.com/watch?v={vid}"
-    ydl_opts: dict[str, Any] = {
-        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "skip_download": True,
-        # Menos ruído / mais estável em servidores
-        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(page_url, download=False)
-    except Exception as e:
+    cookies_file = _resolve_cookies_file()
+    last_error = ""
+    saw_bot_block = False
+
+    for clients in _PLAYER_CLIENT_ATTEMPTS:
+        ydl_opts: dict[str, Any] = {
+            "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "skip_download": True,
+            "extractor_args": {"youtube": {"player_client": list(clients)}},
+        }
+        if cookies_file:
+            ydl_opts["cookiefile"] = cookies_file
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(page_url, download=False)
+        except Exception as e:
+            last_error = str(e)
+            if _is_bot_block_error(last_error):
+                saw_bot_block = True
+            continue
+
+        if not isinstance(info, dict):
+            last_error = "Resposta inválida ao resolver o áudio."
+            continue
+
+        audio_url, ext = _pick_audio_url(info)
+        if not audio_url:
+            last_error = "Não foi encontrado um stream de áudio para este vídeo."
+            continue
+
+        title = str(info.get("title") or "").strip() or None
+        result = YoutubeAudioResult(
+            ok=True,
+            audio_url=audio_url,
+            mime=_mime_for_ext(ext),
+            title=title,
+            ext=ext,
+        )
+        _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
+        return result
+
+    if saw_bot_block and not cookies_file:
+        return YoutubeAudioResult(ok=False, error=_BOT_BLOCK_HINT)
+    if saw_bot_block and cookies_file:
         return YoutubeAudioResult(
             ok=False,
-            error=f"Não foi possível obter o áudio deste vídeo: {e}",
-        )
-
-    if not isinstance(info, dict):
-        return YoutubeAudioResult(ok=False, error="Resposta inválida ao resolver o áudio.")
-
-    audio_url = str(info.get("url") or "").strip()
-    # Às vezes o formato escolhido vem em «requested_formats» / «formats»
-    if not audio_url:
-        formats = info.get("formats") if isinstance(info.get("formats"), list) else []
-        audio_formats = [
-            f
-            for f in formats
-            if isinstance(f, dict)
-            and f.get("url")
-            and (f.get("acodec") not in (None, "none"))
-            and (f.get("vcodec") in (None, "none"))
-        ]
-        audio_formats.sort(
-            key=lambda f: (
-                int(f.get("abr") or 0),
-                int(f.get("tbr") or 0),
+            error=(
+                "O YouTube ainda bloqueia o áudio apesar dos cookies. "
+                "Reexporte cookies frescos (conta logada no YouTube, sem 2FA challenge "
+                "pendente), confirme o formato Netscape e reinicie o contentor. "
+                f"Detalhe: {last_error}"
             ),
-            reverse=True,
         )
-        if audio_formats:
-            audio_url = str(audio_formats[0].get("url") or "").strip()
-
-    if not audio_url:
-        return YoutubeAudioResult(
-            ok=False,
-            error="Não foi encontrado um stream de áudio para este vídeo.",
-        )
-
-    ext = str(info.get("ext") or "").strip().lower() or None
-    mime = None
-    if ext in {"m4a", "mp4"}:
-        mime = "audio/mp4"
-    elif ext == "webm":
-        mime = "audio/webm"
-    elif ext == "mp3":
-        mime = "audio/mpeg"
-    elif ext in {"opus", "ogg"}:
-        mime = "audio/ogg"
-
-    title = str(info.get("title") or "").strip() or None
-    result = YoutubeAudioResult(
-        ok=True,
-        audio_url=audio_url,
-        mime=mime,
-        title=title,
-        ext=ext,
+    return YoutubeAudioResult(
+        ok=False,
+        error=f"Não foi possível obter o áudio deste vídeo: {last_error or 'erro desconhecido'}",
     )
-    _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
-    return result
 
