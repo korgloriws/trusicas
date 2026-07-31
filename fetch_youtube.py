@@ -40,9 +40,9 @@ _PIPED_STREAM_APIS = (
 )
 
 _BOT_BLOCK_HINT = (
-    "O YouTube bloqueou o IP deste servidor. No .env da VPS defina "
-    "YOUTUBE_COOKIES_B64 com cookies Netscape frescos (ver .env.example / "
-    "tools/cookies_to_b64.py) e reinicie o contentor."
+    "O YouTube bloqueou o IP deste servidor. Coloque o ficheiro Netscape em "
+    "data/youtube.cookies.txt (ex.: /opt/trusicas/data/youtube.cookies.txt) "
+    "ou defina YOUTUBE_COOKIES_B64 no .env, e reinicie o contentor."
 )
 
 
@@ -347,21 +347,22 @@ def _materialize_env_cookies() -> str | None:
 
 
 def _resolve_cookies_file() -> str | None:
-    """Prioridade: .env → ficheiro guardado na app → caminhos configurados."""
+    """Prioridade: .env (B64) → youtube.cookies.txt → ficheiro legado da UI."""
     from_env = _materialize_env_cookies()
     if from_env:
         return from_env
-
-    if _ENV_COOKIES_PATH.is_file() and _ENV_COOKIES_PATH.stat().st_size > 0:
-        return str(_ENV_COOKIES_PATH.resolve())
 
     settings = get_youtube_settings()
     configured = (settings.get("cookies_file") or "").strip()
     candidates: list[Path] = []
     if configured:
         candidates.append(Path(configured))
+    # Ficheiro que o admin coloca à mão (preferido sobre o legado da UI)
     candidates.append(_PROJECT_ROOT / "data" / "youtube.cookies.txt")
     candidates.append(Path("/app/data/youtube.cookies.txt"))
+    # Legado: cookies colados pela antiga UI
+    candidates.append(_ENV_COOKIES_PATH)
+
     seen: set[str] = set()
     for path in candidates:
         try:
@@ -576,8 +577,9 @@ def _download_with_ytdlp(vid: str) -> YoutubeAudioResult:
         return YoutubeAudioResult(
             ok=False,
             error=(
-                "O YouTube ainda bloqueia o áudio. Actualize YOUTUBE_COOKIES_B64 "
-                "com cookies frescos (conta logada no YouTube) e faça redeploy. "
+                "O YouTube ainda bloqueia o áudio mesmo com cookies. "
+                "Exporte cookies frescos (conta logada no YouTube no Chrome), "
+                "substitua data/youtube.cookies.txt e reinicie o contentor. "
                 f"Detalhe: {last_error}"
             ),
         )

@@ -2928,9 +2928,9 @@ function mountYoutubeAudioUi(videoId) {
                 finish(true);
                 return;
               }
-              if (server.needs_cookies || code === 101 || code === 150) {
+              if (server.needs_cookies) {
                 setAudioStatus(
-                  "Áudio indisponível neste servidor (YouTube bloqueou). O admin precisa de YOUTUBE_COOKIES_B64 no .env da VPS — ver .env.example."
+                  "Áudio indisponível: falta youtube.cookies.txt em /opt/trusicas/data/ (ou YOUTUBE_COOKIES_B64 no .env)."
                 );
               } else {
                 setAudioStatus(

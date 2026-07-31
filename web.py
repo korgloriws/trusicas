@@ -833,15 +833,16 @@ def create_app() -> Flask:
         if not video_id:
             return jsonify({"ok": False, "error": "Indique um video_id ou URL YouTube."}), 400
         result = resolve_youtube_audio(video_id)
+        cookies_ok = youtube_cookies_configured()
         if not result.ok or not result.local_path:
             err = result.error or "Áudio indisponível."
             return jsonify(
                 {
                     "ok": False,
                     "error": err,
-                    "needs_cookies": (not youtube_cookies_configured())
-                    or ("bloqueou" in err.lower())
-                    or ("cookies" in err.lower()),
+                    "cookies_configured": cookies_ok,
+                    # Só true se ainda não há cookies no servidor
+                    "needs_cookies": not cookies_ok,
                 }
             ), 404
         return jsonify(
@@ -851,6 +852,7 @@ def create_app() -> Flask:
                 "title": result.title,
                 "mime": result.mime,
                 "ext": result.ext,
+                "cookies_configured": cookies_ok,
                 # Ficheiro servido pelo Trusicas (cache em data/yt_audio/).
                 "play_url": f"/api/youtube/media/{video_id}",
             }
