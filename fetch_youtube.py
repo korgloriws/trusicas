@@ -505,6 +505,15 @@ def _result_from_cache(path: Path, *, title: str | None = None) -> YoutubeAudioR
     )
 
 
+# Formatos: clientes mobile por vezes não têm m4a/webm “bestaudio” clássico.
+_FORMAT_ATTEMPTS: tuple[str, ...] = (
+    "bestaudio/best",
+    "ba/b",
+    "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+    "best",
+)
+
+
 def _download_with_ytdlp(vid: str) -> YoutubeAudioResult:
     try:
         import yt_dlp
@@ -524,52 +533,51 @@ def _download_with_ytdlp(vid: str) -> YoutubeAudioResult:
     outtmpl = str(_AUDIO_CACHE_DIR / f"{vid}.%(ext)s")
 
     for clients in _PLAYER_CLIENT_ATTEMPTS:
-        ydl_opts: dict[str, Any] = {
-            "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "outtmpl": outtmpl,
-            "overwrites": True,
-            "extractor_args": {"youtube": {"player_client": list(clients)}},
-        }
-        if cookies_file:
-            ydl_opts["cookiefile"] = cookies_file
-        if proxy:
-            ydl_opts["proxy"] = proxy
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(page_url, download=True)
-        except Exception as e:
-            last_error = str(e)
-            if _is_bot_block_error(last_error):
-                saw_bot_block = True
-            # Limpar leftovers .part
-            for junk in _AUDIO_CACHE_DIR.glob(f"{vid}.*"):
-                if junk.suffix == ".part" or junk.stat().st_size < 512:
-                    try:
-                        junk.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-            continue
+        for fmt in _FORMAT_ATTEMPTS:
+            ydl_opts: dict[str, Any] = {
+                "format": fmt,
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "outtmpl": outtmpl,
+                "overwrites": True,
+                "extractor_args": {"youtube": {"player_client": list(clients)}},
+            }
+            if cookies_file:
+                ydl_opts["cookiefile"] = cookies_file
+            if proxy:
+                ydl_opts["proxy"] = proxy
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(page_url, download=True)
+            except Exception as e:
+                last_error = str(e)
+                if _is_bot_block_error(last_error):
+                    saw_bot_block = True
+                for junk in _AUDIO_CACHE_DIR.glob(f"{vid}.*"):
+                    if junk.suffix == ".part" or junk.stat().st_size < 512:
+                        try:
+                            junk.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                continue
 
-        cached = _find_cached_audio(vid)
-        if cached:
-            title = None
+            cached = _find_cached_audio(vid)
+            if cached:
+                title = None
+                if isinstance(info, dict):
+                    title = str(info.get("title") or "").strip() or None
+                return _result_from_cache(cached, title=title)
+
             if isinstance(info, dict):
+                audio_url, ext = _pick_audio_url(info)
                 title = str(info.get("title") or "").strip() or None
-            return _result_from_cache(cached, title=title)
-
-        # download=True por vezes só devolve info; tentar URL + httpx
-        if isinstance(info, dict):
-            audio_url, ext = _pick_audio_url(info)
-            title = str(info.get("title") or "").strip() or None
-            if audio_url:
-                saved = _http_download_audio(vid, audio_url, ext_hint=ext)
-                if saved.ok:
-                    saved.title = title or saved.title
-                    return saved
-        last_error = "yt-dlp não gravou o ficheiro de áudio."
+                if audio_url:
+                    saved = _http_download_audio(vid, audio_url, ext_hint=ext)
+                    if saved.ok:
+                        saved.title = title or saved.title
+                        return saved
+            last_error = "yt-dlp não gravou o ficheiro de áudio."
 
     if saw_bot_block and not cookies_file and not proxy:
         return YoutubeAudioResult(ok=False, error=_BOT_BLOCK_HINT)
