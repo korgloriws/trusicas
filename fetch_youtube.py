@@ -13,6 +13,7 @@ import httpx
 from config import ensure_env_loaded, get_youtube_settings
 
 YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
+YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 USER_AGENT = "Trusicas/1.0 (educational lyrics lesson app)"
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")

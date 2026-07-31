@@ -311,10 +311,11 @@
         <div class="audio-head">
           <div class="audio-head-copy">
             <h3 class="audio-title">Áudio da música</h3>
-            <p class="audio-desc">Ouve na Aula sem sair do Trusicas.</p>
+            <p class="audio-desc">Ouve na Aula sem sair do Trusicas. Se o YouTube bloquear o embed, o servidor toca o áudio (precisa de cookies uma vez — só o admin).</p>
           </div>
           <div class="audio-head-actions">
             <button type="button" id="btn-audio-search" class="btn btn-secondary btn-sm">Buscar áudio</button>
+            <button type="button" id="btn-audio-cookies" class="btn btn-secondary btn-sm hidden">Desbloquear YouTube</button>
           </div>
         </div>
         <div id="audio-player-shell" class="audio-player-shell hidden">
@@ -322,6 +323,30 @@
             <div id="audio-player"></div>
           </div>
           <p id="audio-track-label" class="audio-track-label muted"></p>
+        </div>
+        <div id="audio-cookies-panel" class="audio-cookies-panel hidden">
+          <p class="audio-cookies-title">Desbloquear áudio na VPS (só admin, uma vez)</p>
+          <ol class="audio-cookies-steps">
+            <li>No <strong>Chrome do teu PC</strong>, abre <code>youtube.com</code> e entra na tua conta.</li>
+            <li>Instala a extensão <strong>Get cookies.txt LOCALLY</strong> (Chrome Web Store).</li>
+            <li>Na página do YouTube, clica no ícone da extensão → <strong>Export</strong>.</li>
+            <li>Abre o ficheiro descarregado com o <strong>Bloco de notas</strong> (não precisa de PowerShell).</li>
+            <li>Seleciona tudo (<kbd>Ctrl+A</kbd>), copia (<kbd>Ctrl+C</kbd>) e cola abaixo.</li>
+            <li>Clica em <strong>Guardar</strong> — depois o áudio funciona para todos os alunos.</li>
+          </ol>
+          <label class="visually-hidden" for="audio-cookies-input">Conteúdo do cookies.txt</label>
+          <textarea
+            id="audio-cookies-input"
+            class="input audio-cookies-input"
+            rows="6"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="Cola aqui o texto completo do cookies.txt (começa muitas vezes com # Netscape HTTP Cookie File)"
+          ></textarea>
+          <div class="audio-cookies-actions">
+            <button type="button" id="btn-audio-cookies-save" class="btn btn-primary btn-sm">Guardar</button>
+            <button type="button" id="btn-audio-cookies-hide" class="btn btn-secondary btn-sm">Fechar</button>
+          </div>
         </div>
         <div id="audio-candidates" class="audio-candidates hidden" role="list"></div>
         <p id="audio-status" class="pill-status pill-status-block" aria-live="polite"></p>
