@@ -22,7 +22,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Anek+Devanagari:wdth,wght@125,700&family=Nunito+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
   <link rel="icon" href="{{ url_for('static', filename='image/trusicas-logo.png') }}" type="image/png" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <link rel="stylesheet" href="{{ static_v('style.css') }}" />
 </head>
 <body class="auth-pending"{% if share_token %} data-share-token="{{ share_token }}"{% endif %}>
   <div id="login-gate" class="login-gate hidden" hidden>
@@ -307,24 +307,24 @@
         <p id="study-status" class="pill-status pill-status-block" aria-live="polite"></p>
       </section>
 
-      <section id="study-youtube" class="surface youtube-surface hidden" aria-label="Áudio da música">
-        <div class="youtube-head">
-          <div class="youtube-head-copy">
-            <h3 class="youtube-title">Áudio da música</h3>
-            <p class="youtube-desc">Ouve na própria aula. O áudio vem do Audius (API aberta) — funciona em produção sem configuração.</p>
+      <section id="study-audio" class="surface audio-surface hidden" aria-label="Áudio da música">
+        <div class="audio-head">
+          <div class="audio-head-copy">
+            <h3 class="audio-title">Áudio da música</h3>
+            <p class="audio-desc">Ouve na própria aula. O áudio vem do Audius (API aberta) — funciona em produção sem configuração.</p>
           </div>
-          <div class="youtube-head-actions">
-            <button type="button" id="btn-youtube-search" class="btn btn-secondary btn-sm">Buscar áudio</button>
+          <div class="audio-head-actions">
+            <button type="button" id="btn-audio-search" class="btn btn-secondary btn-sm">Buscar áudio</button>
           </div>
         </div>
-        <div id="youtube-player-shell" class="youtube-player-shell hidden">
-          <div class="youtube-audio-frame">
-            <div id="youtube-player"></div>
+        <div id="audio-player-shell" class="audio-player-shell hidden">
+          <div class="audio-player-frame">
+            <div id="audio-player"></div>
           </div>
-          <p id="youtube-track-label" class="youtube-track-label muted"></p>
+          <p id="audio-track-label" class="audio-track-label muted"></p>
         </div>
-        <div id="youtube-candidates" class="youtube-candidates hidden" role="list"></div>
-        <p id="youtube-status" class="pill-status pill-status-block" aria-live="polite"></p>
+        <div id="audio-candidates" class="audio-candidates hidden" role="list"></div>
+        <p id="audio-status" class="pill-status pill-status-block" aria-live="polite"></p>
       </section>
 
       <section id="result" class="hidden">
@@ -607,6 +607,6 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ static_v('app.js') }}"></script>
 </body>
 </html>

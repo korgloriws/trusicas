@@ -101,6 +101,26 @@ def create_app() -> Flask:
     init_db()
     ensure_admin_user()
 
+    @app.context_processor
+    def _inject_static_v():
+        """Cache-bust de CSS/JS para o browser não ficar com app.js antigo (YouTube)."""
+
+        def static_v(filename: str) -> str:
+            path = _ROOT / "static" / filename
+            try:
+                ver = int(path.stat().st_mtime)
+            except OSError:
+                ver = 1
+            return f"/static/{filename}?v={ver}"
+
+        return {"static_v": static_v}
+
+    @app.after_request
+    def _no_cache_html(resp):
+        if resp.content_type and "text/html" in resp.content_type:
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return resp
+
     @app.get("/")
     def index():
         return render_template(

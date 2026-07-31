@@ -2050,11 +2050,11 @@ html[data-theme="light"] .playlist-bar {
 }
 
 /* —— YouTube player (Aula) —— */
-.youtube-surface {
+.audio-surface {
   margin-top: 0.85rem;
 }
 
-.youtube-head {
+.audio-head {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -2063,30 +2063,30 @@ html[data-theme="light"] .playlist-bar {
   margin-bottom: 0.65rem;
 }
 
-.youtube-title {
+.audio-title {
   margin: 0 0 0.2rem;
   font-size: 1.05rem;
   font-weight: 700;
 }
 
-.youtube-desc {
+.audio-desc {
   margin: 0;
   font-size: 0.88rem;
   color: var(--muted);
   max-width: 36rem;
 }
 
-.youtube-head-actions {
+.audio-head-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
 }
 
-.youtube-player-shell {
+.audio-player-shell {
   margin-top: 0.35rem;
 }
 
-.youtube-player-frame {
+.audio-player-frame-yt {
   position: relative;
   width: 100%;
   max-width: 52rem;
@@ -2097,15 +2097,15 @@ html[data-theme="light"] .playlist-bar {
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.youtube-player-frame iframe,
-#youtube-player {
+.audio-player-frame-yt iframe,
+#audio-player {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
 }
 
-.youtube-audio-frame {
+.audio-player-frame {
   position: relative;
   width: 100%;
   max-width: 52rem;
@@ -2115,19 +2115,19 @@ html[data-theme="light"] .playlist-bar {
   background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
 }
 
-.youtube-audio-frame #youtube-player {
+.audio-player-frame #audio-player {
   position: static;
   width: 100%;
   height: auto;
 }
 
-.youtube-audio {
+.audio-el {
   display: block;
   width: 100%;
   height: 2.75rem;
 }
 
-.youtube-engine {
+.audio-engine {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -2176,12 +2176,12 @@ html[data-theme="light"] .playlist-bar {
   white-space: nowrap;
 }
 
-.youtube-track-label {
+.audio-track-label {
   margin: 0.45rem 0 0;
   font-size: 0.84rem;
 }
 
-.youtube-track-row {
+.audio-track-row {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -2190,12 +2190,12 @@ html[data-theme="light"] .playlist-bar {
   margin-top: 0.45rem;
 }
 
-.youtube-track-row .youtube-track-label {
+.audio-track-row .audio-track-label {
   margin: 0;
   flex: 1 1 12rem;
 }
 
-.youtube-open-link {
+.audio-open-link {
   font-size: 0.82rem;
   font-weight: 650;
   color: var(--accent-hot);
@@ -2203,7 +2203,7 @@ html[data-theme="light"] .playlist-bar {
   white-space: nowrap;
 }
 
-.youtube-open-link:hover {
+.audio-open-link:hover {
   text-decoration: underline;
 }
 
@@ -2239,7 +2239,7 @@ body.share-mode #btn-study-edit,
 body.share-mode #btn-study-new-lesson,
 body.share-mode #btn-study-library,
 body.share-mode #btn-study-share,
-body.share-mode .youtube-head-actions,
+body.share-mode .audio-head-actions,
 body.share-mode #training-mode-banner,
 body.share-mode .hero-toolbar .segmented[aria-label="Navegação principal"],
 body.share-mode #view-create,
@@ -2278,7 +2278,7 @@ body.share-mode #view-study {
 }
 
 
-.youtube-url-row {
+.audio-url-row {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
@@ -2286,19 +2286,19 @@ body.share-mode #view-study {
   align-items: center;
 }
 
-.youtube-url-row .input {
+.audio-url-row .input {
   flex: 1 1 14rem;
   min-width: 0;
 }
 
-.youtube-candidates {
+.audio-candidates {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
   margin-top: 0.65rem;
 }
 
-.youtube-candidate {
+.audio-candidate {
   width: 100%;
   justify-content: flex-start;
   text-align: left;
@@ -2307,12 +2307,12 @@ body.share-mode #view-study {
   padding: 0.55rem 0.75rem;
 }
 
-.youtube-candidate-title {
+.audio-candidate-title {
   display: block;
   font-weight: 650;
 }
 
-.youtube-candidate-meta {
+.audio-candidate-meta {
   display: block;
   margin-top: 0.15rem;
   font-size: 0.78rem;
@@ -2320,11 +2320,11 @@ body.share-mode #view-study {
 }
 
 @media (max-width: 640px) {
-  .youtube-head-actions {
+  .audio-head-actions {
     width: 100%;
   }
 
-  .youtube-head-actions .btn {
+  .audio-head-actions .btn {
     flex: 1 1 auto;
   }
 }
