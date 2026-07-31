@@ -172,6 +172,12 @@ def init_db() -> None:
             conn.execute("ALTER TABLE lessons ADD COLUMN youtube_video_id TEXT")
         if "youtube_title" not in cols:
             conn.execute("ALTER TABLE lessons ADD COLUMN youtube_title TEXT")
+        if "audio_track_id" not in cols:
+            conn.execute("ALTER TABLE lessons ADD COLUMN audio_track_id TEXT")
+        if "audio_title" not in cols:
+            conn.execute("ALTER TABLE lessons ADD COLUMN audio_title TEXT")
+        if "audio_source" not in cols:
+            conn.execute("ALTER TABLE lessons ADD COLUMN audio_source TEXT")
         if "share_token" not in cols:
             conn.execute("ALTER TABLE lessons ADD COLUMN share_token TEXT")
         conn.execute(
@@ -450,6 +456,55 @@ def set_lesson_youtube(
         "youtube_video_id": out_id,
         "youtube_title": out_title,
     }
+
+
+def set_lesson_audio(
+    lesson_id: int,
+    *,
+    user_id: int,
+    track_id: str | None,
+    track_title: str | None = None,
+    source: str = "audius",
+) -> dict[str, Any] | None:
+    """Guarda ou limpa o áudio (Audius) da lição."""
+    tid = str(track_id or "").strip() or None
+    title = str(track_title or "").strip() or None
+    src = str(source or "audius").strip().lower() or "audius"
+    if tid is None:
+        title = None
+        src = None
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE lessons
+            SET audio_track_id = ?, audio_title = ?, audio_source = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (tid, title, src, lesson_id, user_id),
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            """
+            SELECT audio_track_id, audio_title, audio_source
+            FROM lessons WHERE id = ? AND user_id = ?
+            """,
+            (lesson_id, user_id),
+        ).fetchone()
+        conn.commit()
+    if row is None:
+        return None
+    out_id = str(row["audio_track_id"] or "").strip() or None
+    out_title = str(row["audio_title"] or "").strip() or None
+    out_src = str(row["audio_source"] or "").strip() or None
+    return {
+        "id": lesson_id,
+        "audio_track_id": out_id,
+        "audio_title": out_title,
+        "audio_source": out_src,
+    }
+
 
 def cifra_text_from_lesson(lesson: dict[str, Any] | None) -> str:
     if not isinstance(lesson, dict):
@@ -1403,7 +1458,9 @@ def get_lesson(lesson_id: int, *, user_id: int) -> dict[str, Any] | None:
             SELECT id, created_at, title_hint, artist_hint, lyrics_en, model,
                    lesson_json, raw_response,
                    COALESCE(NULLIF(TRIM(progress), ''), 'aprender') AS progress,
-                   youtube_video_id, youtube_title, share_token
+                   youtube_video_id, youtube_title,
+                   audio_track_id, audio_title, audio_source,
+                   share_token
             FROM lessons WHERE id = ? AND user_id = ?
             """,
             (lesson_id, user_id),
@@ -1416,15 +1473,19 @@ def get_lesson(lesson_id: int, *, user_id: int) -> dict[str, Any] | None:
         lesson = {}
     yt_id = ""
     yt_title = ""
+    audio_id = ""
+    audio_title = ""
+    audio_source = ""
     share_token = ""
     try:
         yt_id = str(row["youtube_video_id"] or "").strip()
         yt_title = str(row["youtube_title"] or "").strip()
+        audio_id = str(row["audio_track_id"] or "").strip()
+        audio_title = str(row["audio_title"] or "").strip()
+        audio_source = str(row["audio_source"] or "").strip()
         share_token = str(row["share_token"] or "").strip()
     except (KeyError, IndexError):
-        yt_id = ""
-        yt_title = ""
-        share_token = ""
+        pass
     return {
         "id": int(row["id"]),
         "created_at": str(row["created_at"]),
@@ -1437,6 +1498,9 @@ def get_lesson(lesson_id: int, *, user_id: int) -> dict[str, Any] | None:
         "progress": _row_progress(row),
         "youtube_video_id": yt_id or None,
         "youtube_title": yt_title or None,
+        "audio_track_id": audio_id or None,
+        "audio_title": audio_title or None,
+        "audio_source": audio_source or None,
         "share_token": share_token or None,
     }
 
@@ -1450,9 +1514,15 @@ def _lesson_public_payload(row: sqlite3.Row) -> dict[str, Any]:
         lesson = {}
     yt_id = ""
     yt_title = ""
+    audio_id = ""
+    audio_title = ""
+    audio_source = ""
     try:
         yt_id = str(row["youtube_video_id"] or "").strip()
         yt_title = str(row["youtube_title"] or "").strip()
+        audio_id = str(row["audio_track_id"] or "").strip()
+        audio_title = str(row["audio_title"] or "").strip()
+        audio_source = str(row["audio_source"] or "").strip()
     except (KeyError, IndexError):
         pass
     return {
@@ -1464,6 +1534,9 @@ def _lesson_public_payload(row: sqlite3.Row) -> dict[str, Any]:
         "lesson": lesson,
         "youtube_video_id": yt_id or None,
         "youtube_title": yt_title or None,
+        "audio_track_id": audio_id or None,
+        "audio_title": audio_title or None,
+        "audio_source": audio_source or None,
         "share_token": str(row["share_token"] or "").strip() or None,
         "read_only": True,
     }
@@ -1479,7 +1552,9 @@ def get_lesson_by_share_token(token: str) -> dict[str, Any] | None:
         row = conn.execute(
             """
             SELECT id, created_at, title_hint, artist_hint, lyrics_en, lesson_json,
-                   youtube_video_id, youtube_title, share_token
+                   youtube_video_id, youtube_title,
+                   audio_track_id, audio_title, audio_source,
+                   share_token
             FROM lessons
             WHERE share_token = ?
             LIMIT 1
@@ -1676,6 +1751,12 @@ def restore_db_bytes(data: bytes) -> dict[str, Any]:
                 conn.execute("ALTER TABLE lessons ADD COLUMN youtube_video_id TEXT")
             if "youtube_title" not in cols:
                 conn.execute("ALTER TABLE lessons ADD COLUMN youtube_title TEXT")
+            if "audio_track_id" not in cols:
+                conn.execute("ALTER TABLE lessons ADD COLUMN audio_track_id TEXT")
+            if "audio_title" not in cols:
+                conn.execute("ALTER TABLE lessons ADD COLUMN audio_title TEXT")
+            if "audio_source" not in cols:
+                conn.execute("ALTER TABLE lessons ADD COLUMN audio_source TEXT")
             if "share_token" not in cols:
                 conn.execute("ALTER TABLE lessons ADD COLUMN share_token TEXT")
             conn.execute(

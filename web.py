@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 from auth import (
     current_user,
@@ -16,6 +16,7 @@ from auth import (
     require_admin,
     require_login,
 )
+from fetch_audius import audius_stream_url, is_audius_track_id, search_audius
 from fetch_cifra import fetch_cifra
 from fetch_lyrics import fetch_lyrics
 from fetch_youtube import (
@@ -58,6 +59,7 @@ from store import (
     save_shared_lyrics,
     save_shared_youtube,
     set_lesson_progress,
+    set_lesson_audio,
     set_lesson_youtube,
     update_lesson,
 )
@@ -129,59 +131,43 @@ def create_app() -> Flask:
         return jsonify({"ok": True, **row})
 
     @app.post("/api/share/<token>/audio")
-    def api_shared_youtube_audio(token: str):
-        """Áudio da lição partilhada (só o video_id guardado nessa lição)."""
+    def api_shared_audio(token: str):
+        """Resolve áudio da lição partilhada (Audius)."""
         row = get_lesson_by_share_token(token)
         if row is None:
             return jsonify({"ok": False, "error": "Link de partilha inválido ou expirado."}), 404
-        expected = str(row.get("youtube_video_id") or "").strip()
+        expected = str(row.get("audio_track_id") or "").strip()
         payload = request.get_json(silent=True) or {}
-        requested = extract_youtube_video_id(
-            str(payload.get("video_id") or payload.get("url") or expected)
-        )
+        requested = str(payload.get("track_id") or expected).strip()
         if not expected or not requested or requested != expected:
             return jsonify(
                 {"ok": False, "error": "Áudio não disponível nesta partilha."}
             ), 404
-        result = resolve_youtube_audio(expected)
-        if not result.ok or not result.local_path:
-            return jsonify(
-                {"ok": False, "error": result.error or "Áudio indisponível."}
-            ), 404
+        if not is_audius_track_id(expected):
+            return jsonify({"ok": False, "error": "Áudio inválido nesta partilha."}), 404
         return jsonify(
             {
                 "ok": True,
-                "video_id": expected,
-                "title": result.title or row.get("youtube_title"),
-                "mime": result.mime,
-                "ext": result.ext,
-                "play_url": f"/api/share/{token}/media/{expected}",
+                "track_id": expected,
+                "title": row.get("audio_title"),
+                "source": row.get("audio_source") or "audius",
+                "mime": "audio/mpeg",
+                "play_url": f"/api/share/{token}/stream/{expected}",
             }
         )
 
-    @app.get("/api/share/<token>/media/<video_id>")
-    def api_shared_youtube_media(token: str, video_id: str):
+    @app.get("/api/share/<token>/stream/<track_id>")
+    def api_shared_audio_stream(token: str, track_id: str):
         row = get_lesson_by_share_token(token)
         if row is None:
             return jsonify({"ok": False, "error": "Link de partilha inválido ou expirado."}), 404
-        expected = str(row.get("youtube_video_id") or "").strip()
-        vid = extract_youtube_video_id(video_id)
-        if not expected or not vid or vid != expected:
+        expected = str(row.get("audio_track_id") or "").strip()
+        tid = str(track_id or "").strip()
+        if not expected or not tid or tid != expected or not is_audius_track_id(tid):
             return jsonify(
                 {"ok": False, "error": "Áudio não disponível nesta partilha."}
             ), 404
-        result = resolve_youtube_audio(expected)
-        if not result.ok or not result.local_path:
-            return jsonify(
-                {"ok": False, "error": result.error or "Áudio indisponível."}
-            ), 404
-        return send_file(
-            result.local_path,
-            mimetype=result.mime or "audio/mp4",
-            conditional=True,
-            as_attachment=False,
-            download_name=f"{expected}.{result.ext or 'm4a'}",
-        )
+        return redirect(audius_stream_url(tid), code=302)
 
     @app.post("/api/lessons/<int:lesson_id>/share")
     @require_login
@@ -586,6 +572,105 @@ def create_app() -> Flask:
                 "lesson": lesson_out,
             }
         )
+
+    @app.post("/api/audio/search")
+    @require_login
+    def api_audio_search():
+        """Busca faixa no Audius (fonte principal de áudio em produção)."""
+        payload = request.get_json(silent=True) or {}
+        title = str(payload.get("title") or "").strip()
+        artist = str(payload.get("artist") or "").strip()
+        uid = _uid()
+        lesson_id: int | None = None
+        raw_id = payload.get("lesson_id")
+        if raw_id is not None and str(raw_id).strip() != "":
+            try:
+                lesson_id = int(raw_id)
+            except (TypeError, ValueError):
+                lesson_id = None
+
+        if lesson_id is not None:
+            lesson = get_lesson(lesson_id, user_id=uid)
+            if lesson is None:
+                return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+            if not title:
+                title = str(lesson.get("title_hint") or "").strip()
+            if not artist:
+                artist = str(lesson.get("artist_hint") or "").strip()
+
+        result = search_audius(title, artist)
+        if not result.ok or not result.track_id:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": result.error or "Nenhuma faixa encontrada.",
+                    "candidates": result.candidates or [],
+                }
+            ), 404
+
+        saved = None
+        if lesson_id is not None:
+            saved = set_lesson_audio(
+                lesson_id,
+                user_id=uid,
+                track_id=result.track_id,
+                track_title=result.title,
+                source="audius",
+            )
+
+        return jsonify(
+            {
+                "ok": True,
+                "track_id": result.track_id,
+                "title": result.title,
+                "artist": result.artist,
+                "source": "audius",
+                "candidates": result.candidates or [],
+                "play_url": f"/api/audio/stream/{result.track_id}",
+                "saved": saved,
+            }
+        )
+
+    @app.patch("/api/lessons/<int:lesson_id>/audio")
+    @require_login
+    def api_set_lesson_audio(lesson_id: int):
+        payload = request.get_json(silent=True) or {}
+        uid = _uid()
+        if get_lesson(lesson_id, user_id=uid) is None:
+            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+        if payload.get("clear"):
+            saved = set_lesson_audio(
+                lesson_id, user_id=uid, track_id=None, track_title=None
+            )
+            return jsonify({"ok": True, **(saved or {"id": lesson_id})})
+        track_id = str(payload.get("track_id") or "").strip()
+        if not is_audius_track_id(track_id):
+            return jsonify({"ok": False, "error": "track_id Audius inválido."}), 400
+        track_title = str(payload.get("title") or payload.get("track_title") or "").strip() or None
+        saved = set_lesson_audio(
+            lesson_id,
+            user_id=uid,
+            track_id=track_id,
+            track_title=track_title,
+            source="audius",
+        )
+        if saved is None:
+            return jsonify({"ok": False, "error": "Não foi possível guardar."}), 500
+        return jsonify(
+            {
+                "ok": True,
+                **saved,
+                "play_url": f"/api/audio/stream/{track_id}",
+            }
+        )
+
+    @app.get("/api/audio/stream/<track_id>")
+    @require_login
+    def api_audio_stream(track_id: str):
+        tid = str(track_id or "").strip()
+        if not is_audius_track_id(tid):
+            return jsonify({"ok": False, "error": "track_id inválido."}), 400
+        return redirect(audius_stream_url(tid), code=302)
 
     @app.post("/api/youtube/search")
     @require_login

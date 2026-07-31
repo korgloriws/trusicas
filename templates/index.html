@@ -311,11 +311,10 @@
         <div class="youtube-head">
           <div class="youtube-head-copy">
             <h3 class="youtube-title">Áudio da música</h3>
-            <p class="youtube-desc">Ouve na própria aula com o nosso leitor. Sem sair da lição e sem configuração.</p>
+            <p class="youtube-desc">Ouve na própria aula. O áudio vem do Audius (API aberta) — funciona em produção sem configuração.</p>
           </div>
           <div class="youtube-head-actions">
             <button type="button" id="btn-youtube-search" class="btn btn-secondary btn-sm">Buscar áudio</button>
-            <button type="button" id="btn-youtube-toggle-url" class="btn btn-secondary btn-sm hidden">Colar link</button>
           </div>
         </div>
         <div id="youtube-player-shell" class="youtube-player-shell hidden">
@@ -323,17 +322,6 @@
             <div id="youtube-player"></div>
           </div>
           <p id="youtube-track-label" class="youtube-track-label muted"></p>
-        </div>
-        <div id="youtube-url-row" class="youtube-url-row hidden">
-          <label class="visually-hidden" for="youtube-url-input">Link do YouTube</label>
-          <input
-            type="url"
-            id="youtube-url-input"
-            class="input"
-            placeholder="https://www.youtube.com/watch?v=…"
-            autocomplete="off"
-          />
-          <button type="button" id="btn-youtube-apply-url" class="btn btn-primary btn-sm">Usar link</button>
         </div>
         <div id="youtube-candidates" class="youtube-candidates hidden" role="list"></div>
         <p id="youtube-status" class="pill-status pill-status-block" aria-live="polite"></p>

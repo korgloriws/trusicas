@@ -35,35 +35,12 @@ let activePlaylistId = null;
 let libraryProgressFilter = "";
 /** Progresso da aula aberta. */
 let studyProgress = "aprender";
-/** YouTube video id da aula aberta. */
-let studyYoutubeId = null;
-/** Título do vídeo YouTube. */
-let studyYoutubeTitle = "";
-/** Lista de candidatos da última busca (para trocar se o embed falhar). */
-let studyYoutubeCandidates = [];
-/** Player IFrame API (áudio oculto) da aula. */
-let studyYtPlayer = null;
-/** Timer do seek UI. */
-let studyYaTick = null;
-/** Promise de carga da IFrame API. */
-let youtubeApiPromise = null;
-
-/** Instâncias Piped/Invidious — o telemóvel do utilizador fala com elas (não a VPS). */
-const YT_SCRAPER_APIS = [
-  "https://pipedapi.kavin.rocks",
-  "https://pipedapi.leptons.xyz",
-  "https://pipedapi.adminforge.de",
-  "https://api.piped.private.coffee",
-  "https://pipedapi.reallyaweso.me",
-  "https://pipedapi.r4fo.com",
-  "https://pipedapi.owo.si",
-  "https://api.piped.yt",
-  "https://pipedapi.darkness.services",
-  "https://pipedapi.orangenet.cc",
-  "https://invidious.fdn.fr",
-  "https://inv.nadeko.net",
-  "https://yewtu.be",
-];
+/** Audius track id da aula aberta. */
+let studyAudioId = null;
+/** Título da faixa de áudio. */
+let studyAudioTitle = "";
+/** Candidatos da última busca Audius. */
+let studyAudioCandidates = [];
 
 const PROGRESS_LABELS = {
   aprender: "Aprender",
@@ -2687,17 +2664,6 @@ function showStudyYoutubePanel(show) {
   panel.classList.toggle("hidden", !show);
 }
 
-function setYoutubePasteVisible(show) {
-  const btn = $("btn-youtube-toggle-url");
-  const row = $("youtube-url-row");
-  if (btn) btn.classList.toggle("hidden", !show);
-  if (!show && row) {
-    row.classList.add("hidden");
-    const urlInput = $("youtube-url-input");
-    if (urlInput) urlInput.value = "";
-  }
-}
-
 function clearYoutubeCandidates() {
   const box = $("youtube-candidates");
   if (!box) return;
@@ -2706,22 +2672,9 @@ function clearYoutubeCandidates() {
 }
 
 function destroyYoutubePlayer() {
-  studyYoutubeId = null;
-  studyYoutubeTitle = "";
-  studyYoutubeCandidates = [];
-  if (studyYaTick) {
-    clearInterval(studyYaTick);
-    studyYaTick = null;
-  }
-  if (studyYtPlayer) {
-    try {
-      if (typeof studyYtPlayer.stopVideo === "function") studyYtPlayer.stopVideo();
-      if (typeof studyYtPlayer.destroy === "function") studyYtPlayer.destroy();
-    } catch (_e) {
-      /* ignore */
-    }
-    studyYtPlayer = null;
-  }
+  studyAudioId = null;
+  studyAudioTitle = "";
+  studyAudioCandidates = [];
   const host = $("youtube-player");
   if (host) {
     const audio = host.querySelector("audio");
@@ -2741,58 +2694,11 @@ function destroyYoutubePlayer() {
   const label = $("youtube-track-label");
   if (label) label.textContent = "";
   clearYoutubeCandidates();
-  setYoutubePasteVisible(false);
   setYoutubeStatus("");
   showStudyYoutubePanel(false);
 }
 
-function ensureYoutubeIframeApi() {
-  if (window.YT && window.YT.Player) return Promise.resolve();
-  if (youtubeApiPromise) return youtubeApiPromise;
-  youtubeApiPromise = new Promise((resolve, reject) => {
-    const done = () => {
-      if (window.YT && window.YT.Player) resolve();
-      else reject(new Error("YouTube API indisponível."));
-    };
-    const prev = window.onYouTubeIframeAPIReady;
-    window.onYouTubeIframeAPIReady = function () {
-      try {
-        if (typeof prev === "function") prev();
-      } catch (_e) {
-        /* ignore */
-      }
-      done();
-    };
-    if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
-      const tag = document.createElement("script");
-      tag.src = "https://www.youtube.com/iframe_api";
-      tag.async = true;
-      tag.onerror = () => reject(new Error("Falha ao carregar o YouTube."));
-      document.head.appendChild(tag);
-    }
-    let n = 0;
-    const poll = setInterval(() => {
-      n += 1;
-      if (window.YT && window.YT.Player) {
-        clearInterval(poll);
-        done();
-      } else if (n > 50) {
-        clearInterval(poll);
-        reject(new Error("Timeout ao carregar o YouTube."));
-      }
-    }, 100);
-  });
-  return youtubeApiPromise;
-}
-
-function formatYaTime(sec) {
-  const s = Math.max(0, Math.floor(Number(sec) || 0));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return m + ":" + String(r).padStart(2, "0");
-}
-
-function mountHtmlAudioElement(host, playUrl, { onError } = {}) {
+function mountHtmlAudioElement(host, playUrl) {
   host.innerHTML = "";
   const audio = document.createElement("audio");
   audio.id = "youtube-audio";
@@ -2802,377 +2708,44 @@ function mountHtmlAudioElement(host, playUrl, { onError } = {}) {
   audio.controlsList = "nodownload";
   audio.src = playUrl;
   audio.addEventListener("error", () => {
-    if (typeof onError === "function") onError();
+    setYoutubeStatus(
+      shareMode
+        ? "Falha ao reproduzir o áudio desta partilha."
+        : "Falha ao reproduzir este áudio. Use «Buscar áudio» para outra versão."
+    );
   });
   audio.addEventListener("loadedmetadata", () => {
     setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
-    if (!shareMode) setYoutubePasteVisible(false);
   });
   host.appendChild(audio);
   return audio;
 }
 
-async function fetchJsonWithTimeout(url, ms = 9000) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (_e) {
-    return null;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-/**
- * Extrai URL de áudio no browser do utilizador (IP residencial), via Piped/Invidious.
- * A VPS não precisa de cookies — o telemóvel faz o scraping.
- */
-async function resolveAudioViaScrapers(videoId) {
-  const id = String(videoId || "").trim();
-  if (!id) return null;
-
-  const tryBase = async (base) => {
-    const root = String(base || "").replace(/\/$/, "");
-    const piped = await fetchJsonWithTimeout(
-      `${root}/streams/${encodeURIComponent(id)}`,
-      6500
-    );
-    if (piped && Array.isArray(piped.audioStreams) && piped.audioStreams.length) {
-      const streams = piped.audioStreams
-        .filter((s) => s && s.url)
-        .sort((a, b) => (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0));
-      if (streams[0]) {
-        return {
-          play_url: String(streams[0].url),
-          mime: String(streams[0].mimeType || "audio/mp4").split(";")[0],
-          title: piped.title ? String(piped.title) : null,
-          source: "piped",
-        };
-      }
-    }
-    const invi = await fetchJsonWithTimeout(
-      `${root}/api/v1/videos/${encodeURIComponent(id)}`,
-      6500
-    );
-    if (invi && Array.isArray(invi.adaptiveFormats)) {
-      const audioFormats = invi.adaptiveFormats
-        .filter(
-          (f) =>
-            f &&
-            f.url &&
-            String(f.type || f.mimeType || "").startsWith("audio")
-        )
-        .sort(
-          (a, b) =>
-            (Number(b.bitrate) || Number(b.audioSampleRate) || 0) -
-            (Number(a.bitrate) || Number(a.audioSampleRate) || 0)
-        );
-      if (audioFormats[0]) {
-        const mime = String(
-          audioFormats[0].type || audioFormats[0].mimeType || "audio/mp4"
-        ).split(";")[0];
-        return {
-          play_url: String(audioFormats[0].url),
-          mime,
-          title: invi.title ? String(invi.title) : null,
-          source: "invidious",
-        };
-      }
-    }
-    return null;
-  };
-
-  // Paralelo em lotes — o primeiro que responder com áudio ganha.
-  const batchSize = 4;
-  for (let i = 0; i < YT_SCRAPER_APIS.length; i += batchSize) {
-    const batch = YT_SCRAPER_APIS.slice(i, i + batchSize);
-    const results = await Promise.all(batch.map((b) => tryBase(b)));
-    const hit = results.find((r) => r && r.play_url);
-    if (hit) return hit;
-  }
-  return null;
-}
-
-async function resolveAudioViaServer(videoId) {
-  const audioEndpoint = shareMode
-    ? "/api/share/" + encodeURIComponent(String(shareToken)) + "/audio"
-    : "/api/youtube/audio";
-  const res = await apiFetch(audioEndpoint, {
-    method: "POST",
-    body: JSON.stringify({ video_id: videoId }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.ok || !data.play_url) {
-    return { ok: false, error: data.error || "Servidor sem áudio." };
-  }
-  return {
-    ok: true,
-    play_url: data.play_url,
-    title: data.title || null,
-    mime: data.mime || null,
-  };
-}
-
-function syncYaUi() {
-  if (!studyYtPlayer || typeof studyYtPlayer.getCurrentTime !== "function") return;
-  const seek = $("ya-seek");
-  const timeEl = $("ya-time");
-  const playBtn = $("ya-play");
-  let cur = 0;
-  let dur = 0;
-  let state = -1;
-  try {
-    cur = studyYtPlayer.getCurrentTime() || 0;
-    dur = studyYtPlayer.getDuration() || 0;
-    state = studyYtPlayer.getPlayerState();
-  } catch (_e) {
-    return;
-  }
-  if (seek && !seek.matches(":active")) {
-    seek.max = String(Math.max(0, dur));
-    seek.value = String(cur);
-  }
-  if (timeEl) {
-    timeEl.textContent = formatYaTime(cur) + " / " + formatYaTime(dur);
-  }
-  if (playBtn) {
-    const playing = state === 1 || state === 3;
-    playBtn.textContent = playing ? "⏸" : "▶";
-    playBtn.setAttribute("aria-label", playing ? "Pausar" : "Reproduzir");
-  }
-}
-
-function buildYaControls(host) {
-  host.innerHTML = "";
-  // Motor YouTube invisível (só áudio); UI é o nosso leitor.
-  const engine = document.createElement("div");
-  engine.id = "youtube-engine";
-  engine.className = "youtube-engine";
-  engine.setAttribute("aria-hidden", "true");
-  const controls = document.createElement("div");
-  controls.className = "ya-controls";
-  controls.innerHTML = `
-    <button type="button" id="ya-play" class="ya-play" aria-label="Reproduzir">▶</button>
-    <input type="range" id="ya-seek" class="ya-seek" min="0" max="0" value="0" step="0.25" aria-label="Posição" />
-    <span id="ya-time" class="ya-time">0:00 / 0:00</span>
-  `;
-  host.appendChild(engine);
-  host.appendChild(controls);
-
-  $("ya-play")?.addEventListener("click", () => {
-    if (!studyYtPlayer) return;
-    try {
-      const st = studyYtPlayer.getPlayerState();
-      if (st === 1 || st === 3) studyYtPlayer.pauseVideo();
-      else studyYtPlayer.playVideo();
-    } catch (_e) {
-      /* ignore */
-    }
-    syncYaUi();
-  });
-  $("ya-seek")?.addEventListener("input", () => {
-    if (!studyYtPlayer) return;
-    const v = Number($("ya-seek").value || 0);
-    try {
-      studyYtPlayer.seekTo(v, true);
-    } catch (_e) {
-      /* ignore */
-    }
-    syncYaUi();
-  });
-}
-
-function mountYoutubeAudioUi(videoId) {
-  const host = $("youtube-player");
-  if (!host) return Promise.resolve(false);
-  buildYaControls(host);
-
-  return ensureYoutubeIframeApi().then(
-    () =>
-      new Promise((resolve) => {
-        let settled = false;
-        const finish = (ok) => {
-          if (settled) return;
-          settled = true;
-          resolve(ok);
-        };
-        try {
-          if (studyYtPlayer && typeof studyYtPlayer.destroy === "function") {
-            studyYtPlayer.destroy();
-          }
-        } catch (_e) {
-          /* ignore */
-        }
-        studyYtPlayer = new window.YT.Player("youtube-engine", {
-          height: "1",
-          width: "1",
-          videoId: String(videoId),
-          host: "https://www.youtube.com",
-          playerVars: {
-            autoplay: 0,
-            controls: 0,
-            disablekb: 1,
-            fs: 0,
-            modestbranding: 1,
-            playsinline: 1,
-            rel: 0,
-            origin: window.location.origin,
-          },
-          events: {
-            onReady: () => {
-              if (studyYaTick) clearInterval(studyYaTick);
-              studyYaTick = setInterval(syncYaUi, 400);
-              syncYaUi();
-              setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
-              if (!shareMode) setYoutubePasteVisible(false);
-              finish(true);
-            },
-            onStateChange: () => syncYaUi(),
-            onError: async (ev) => {
-              const code = ev && ev.data;
-              setYoutubeStatus(
-                "Este vídeo não permite o leitor embutido. A tentar extrair o áudio…"
-              );
-              const scraped = await resolveAudioViaScrapers(videoId);
-              if (scraped && scraped.play_url) {
-                if (studyYtPlayer) {
-                  try {
-                    studyYtPlayer.destroy();
-                  } catch (_e) {
-                    /* ignore */
-                  }
-                  studyYtPlayer = null;
-                }
-                if (studyYaTick) {
-                  clearInterval(studyYaTick);
-                  studyYaTick = null;
-                }
-                mountHtmlAudioElement(host, scraped.play_url, {
-                  onError: () => {
-                    setYoutubeStatus(
-                      "Falha ao reproduzir. Use «Buscar áudio» para outra versão."
-                    );
-                    if (!shareMode) setYoutubePasteVisible(true);
-                  },
-                });
-                if (scraped.title && !studyYoutubeTitle) {
-                  studyYoutubeTitle = scraped.title;
-                  const label = $("youtube-track-label");
-                  if (label) label.textContent = studyYoutubeTitle;
-                }
-                finish(true);
-                return;
-              }
-              setYoutubeStatus(
-                code === 101 || code === 150
-                  ? "Este vídeo bloqueia reprodução embutida. Use «Buscar áudio» para outra versão (ex.: Official Audio)."
-                  : "Não foi possível carregar o áudio. Tente «Buscar áudio»."
-              );
-              if (!shareMode) setYoutubePasteVisible(true);
-              finish(false);
-            },
-          },
-        });
-      })
-  );
-}
-
-async function mountYoutubePlayer(videoId, videoTitle) {
-  const id = String(videoId || "").trim();
+async function mountAudioPlayer(trackId, trackTitle) {
+  const id = String(trackId || "").trim();
   if (!id) return false;
-  studyYoutubeId = id;
-  studyYoutubeTitle = videoTitle ? String(videoTitle).trim() : "";
+  studyAudioId = id;
+  studyAudioTitle = trackTitle ? String(trackTitle).trim() : "";
   showStudyYoutubePanel(true);
   const shell = $("youtube-player-shell");
   if (shell) shell.classList.remove("hidden");
   const label = $("youtube-track-label");
   if (label) {
-    label.textContent = studyYoutubeTitle
-      ? studyYoutubeTitle
-      : `Faixa · ${id}`;
+    label.textContent = studyAudioTitle ? studyAudioTitle : `Faixa · ${id}`;
   }
-
   const host = $("youtube-player");
   if (!host) return false;
 
-  if (studyYaTick) {
-    clearInterval(studyYaTick);
-    studyYaTick = null;
-  }
-  if (studyYtPlayer) {
-    try {
-      if (typeof studyYtPlayer.destroy === "function") studyYtPlayer.destroy();
-    } catch (_e) {
-      /* ignore */
-    }
-    studyYtPlayer = null;
-  }
-  host.innerHTML = "";
+  const playUrl = shareMode
+    ? "/api/share/" +
+      encodeURIComponent(String(shareToken)) +
+      "/stream/" +
+      encodeURIComponent(id)
+    : "/api/audio/stream/" + encodeURIComponent(id);
+
   setYoutubeStatus("A carregar áudio…");
-
-  // 1) Nosso leitor a controlar o YouTube oculto — zero config, fica na aula
-  try {
-    const okUi = await mountYoutubeAudioUi(id);
-    if (okUi) return true;
-  } catch (_e) {
-    /* continua para scrapers */
-  }
-
-  // 2) Scraping no telemóvel/PC (Piped/Invidious) → <audio> nativo
-  try {
-    const scraped = await resolveAudioViaScrapers(id);
-    if (scraped && scraped.play_url) {
-      if (scraped.title && !studyYoutubeTitle) {
-        studyYoutubeTitle = scraped.title;
-        if (label) label.textContent = studyYoutubeTitle;
-      }
-      mountHtmlAudioElement(host, scraped.play_url, {
-        onError: () => {
-          setYoutubeStatus(
-            "Falha ao reproduzir. Use «Buscar áudio» para outra versão."
-          );
-          if (!shareMode) setYoutubePasteVisible(true);
-        },
-      });
-      return true;
-    }
-  } catch (_e) {
-    /* continua */
-  }
-
-  // 3) Servidor (útil em local / com cookies admin)
-  try {
-    const server = await resolveAudioViaServer(id);
-    if (server.ok && server.play_url) {
-      if (server.title && !studyYoutubeTitle) {
-        studyYoutubeTitle = String(server.title);
-        if (label) label.textContent = studyYoutubeTitle;
-      }
-      mountHtmlAudioElement(host, server.play_url, {
-        onError: () => {
-          setYoutubeStatus(
-            "Falha ao reproduzir. Use «Buscar áudio» para outra versão."
-          );
-          if (!shareMode) setYoutubePasteVisible(true);
-        },
-      });
-      return true;
-    }
-  } catch (_e) {
-    /* continua */
-  }
-
-  setYoutubeStatus(
-    "Não foi possível obter o áudio. Use «Buscar áudio» para outra versão ou cole um link."
-  );
-  if (!shareMode) setYoutubePasteVisible(true);
-  return false;
+  mountHtmlAudioElement(host, playUrl);
+  return true;
 }
 
 function renderYoutubeCandidates(candidates, { excludeId = null } = {}) {
@@ -3181,7 +2754,7 @@ function renderYoutubeCandidates(candidates, { excludeId = null } = {}) {
   box.innerHTML = "";
   const skip = excludeId ? String(excludeId) : "";
   const list = (Array.isArray(candidates) ? candidates : [])
-    .filter((c) => c && c.video_id && String(c.video_id) !== skip)
+    .filter((c) => c && (c.track_id || c.video_id) && String(c.track_id || c.video_id) !== skip)
     .slice(0, 6);
   if (!list.length) {
     box.classList.add("hidden");
@@ -3193,38 +2766,35 @@ function renderYoutubeCandidates(candidates, { excludeId = null } = {}) {
     btn.type = "button";
     btn.className = "btn btn-secondary youtube-candidate";
     btn.setAttribute("role", "listitem");
-    const title = c.title || c.video_id || "Vídeo";
-    const channel = c.channel_title || "";
+    const tid = c.track_id || c.video_id;
+    const title = c.title || tid || "Faixa";
+    const meta = c.artist || c.channel_title || "Audius";
     btn.innerHTML = `<span class="youtube-candidate-title">${esc(title)}</span>
-      <span class="youtube-candidate-meta">${esc(channel || "YouTube")}</span>`;
+      <span class="youtube-candidate-meta">${esc(meta)}</span>`;
     btn.addEventListener("click", async () => {
       if (activeLessonId == null) return;
       setYoutubeStatus("A guardar áudio…");
       try {
-        await saveLessonYoutube(activeLessonId, c.video_id, title);
-        const ok = await mountYoutubePlayer(c.video_id, title);
+        await saveLessonAudio(activeLessonId, tid, title);
+        const ok = await mountAudioPlayer(tid, title);
         clearYoutubeCandidates();
-        if (ok) {
-          setYoutubeStatus("Áudio actualizado.");
-          setYoutubePasteVisible(false);
-        }
+        if (ok) setYoutubeStatus("Áudio actualizado.");
       } catch (e) {
         setYoutubeStatus(String(e.message || e));
-        setYoutubePasteVisible(true);
       }
     });
     box.appendChild(btn);
   }
 }
 
-async function saveLessonYoutube(lessonId, videoId, videoTitle) {
+async function saveLessonAudio(lessonId, trackId, trackTitle) {
   const res = await apiFetch(
-    "/api/lessons/" + encodeURIComponent(String(lessonId)) + "/youtube",
+    "/api/lessons/" + encodeURIComponent(String(lessonId)) + "/audio",
     {
       method: "PATCH",
       body: JSON.stringify({
-        video_id: videoId,
-        title: videoTitle || null,
+        track_id: trackId,
+        title: trackTitle || null,
       }),
     }
   );
@@ -3232,8 +2802,8 @@ async function saveLessonYoutube(lessonId, videoId, videoTitle) {
   if (!res.ok || !data.ok) {
     throw new Error(data.error || "Não foi possível guardar o áudio.");
   }
-  studyYoutubeId = data.youtube_video_id || videoId;
-  studyYoutubeTitle = data.youtube_title || videoTitle || "";
+  studyAudioId = data.audio_track_id || trackId;
+  studyAudioTitle = data.audio_title || trackTitle || "";
   return data;
 }
 
@@ -3244,16 +2814,14 @@ async function searchStudyYoutube({ force = false, auto = false } = {}) {
   if (!title || !artist) {
     showStudyYoutubePanel(true);
     setYoutubeStatus("Defina título e artista na lição para buscar o áudio.");
-    setYoutubePasteVisible(true);
     clearYoutubeCandidates();
     return;
   }
   showStudyYoutubePanel(true);
   clearYoutubeCandidates();
-  if (auto) setYoutubePasteVisible(false);
   setYoutubeStatus(auto ? "A procurar o áudio…" : "A buscar outras versões…");
   try {
-    const res = await apiFetch("/api/youtube/search", {
+    const res = await apiFetch("/api/audio/search", {
       method: "POST",
       body: JSON.stringify({
         title,
@@ -3263,39 +2831,36 @@ async function searchStudyYoutube({ force = false, auto = false } = {}) {
       }),
     });
     const data = await res.json();
-    studyYoutubeCandidates = Array.isArray(data.candidates) ? data.candidates : [];
+    studyAudioCandidates = Array.isArray(data.candidates) ? data.candidates : [];
     if (!res.ok || !data.ok) {
-      setYoutubeStatus(data.error || "Não foi possível encontrar o áudio.");
-      setYoutubePasteVisible(true);
-      // Em falha automática não listamos opções; só no pedido manual.
-      if (!auto) renderYoutubeCandidates(studyYoutubeCandidates);
+      setYoutubeStatus(
+        data.error ||
+          "Não foi possível encontrar o áudio no Audius. Tente outro título/artista."
+      );
+      if (!auto) renderYoutubeCandidates(studyAudioCandidates);
       return;
     }
 
-    // Automático (ou ainda sem áudio): monta o melhor resultado.
-    // «Buscar áudio» com player já activo: só mostra outras versões.
-    const alreadyPlaying = Boolean(studyYoutubeId) && !auto;
+    const alreadyPlaying = Boolean(studyAudioId) && !auto;
     if (!alreadyPlaying) {
-      const ok = await mountYoutubePlayer(data.video_id, data.title || "");
+      const ok = await mountAudioPlayer(data.track_id, data.title || "");
       if (!ok) {
-        setYoutubePasteVisible(true);
         if (!auto) {
-          renderYoutubeCandidates(studyYoutubeCandidates, { excludeId: data.video_id });
+          renderYoutubeCandidates(studyAudioCandidates, { excludeId: data.track_id });
         }
         return;
       }
-      setYoutubePasteVisible(false);
     }
 
     if (auto) {
       clearYoutubeCandidates();
       setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
     } else {
-      renderYoutubeCandidates(studyYoutubeCandidates, {
-        excludeId: studyYoutubeId || data.video_id,
+      renderYoutubeCandidates(studyAudioCandidates, {
+        excludeId: studyAudioId || data.track_id,
       });
       setYoutubeStatus(
-        studyYoutubeCandidates.length > 1
+        studyAudioCandidates.length > 1
           ? "Outras versões encontradas — toque numa para trocar."
           : alreadyPlaying
             ? "Não há outras versões além da actual."
@@ -3304,7 +2869,6 @@ async function searchStudyYoutube({ force = false, auto = false } = {}) {
     }
   } catch (e) {
     setYoutubeStatus(String(e));
-    setYoutubePasteVisible(true);
     clearYoutubeCandidates();
   }
 }
@@ -3312,10 +2876,10 @@ async function searchStudyYoutube({ force = false, auto = false } = {}) {
 async function setupStudyYoutube(data) {
   showStudyYoutubePanel(true);
   clearYoutubeCandidates();
-  setYoutubePasteVisible(false);
-  const existingId = data && data.youtube_video_id ? String(data.youtube_video_id).trim() : "";
+  const existingId =
+    data && data.audio_track_id ? String(data.audio_track_id).trim() : "";
   if (existingId) {
-    const ok = await mountYoutubePlayer(existingId, data.youtube_title || "");
+    const ok = await mountAudioPlayer(existingId, data.audio_title || "");
     if (ok) setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
     return;
   }
@@ -3326,10 +2890,10 @@ async function setupStudyYoutube(data) {
   if (isLoggedIn && studyTitle && studyTitle !== "Sem título" && studyArtist) {
     await searchStudyYoutube({ auto: true, force: false });
   } else {
-    setYoutubeStatus("Não foi possível buscar automaticamente — cole um link do YouTube.");
-    setYoutubePasteVisible(true);
+    setYoutubeStatus("Defina título e artista para buscar o áudio automaticamente.");
   }
 }
+
 
 async function loadSharedLesson(token) {
   const tok = String(token || "").trim();
@@ -3753,52 +3317,6 @@ $("study-progress")?.addEventListener("change", async () => {
 
 $("btn-youtube-search")?.addEventListener("click", () => {
   searchStudyYoutube({ force: true, auto: false });
-});
-
-$("btn-youtube-toggle-url")?.addEventListener("click", () => {
-  const row = $("youtube-url-row");
-  if (!row) return;
-  const open = row.classList.contains("hidden");
-  row.classList.toggle("hidden", !open);
-  if (open) {
-    showStudyYoutubePanel(true);
-    $("youtube-url-input")?.focus();
-  }
-});
-
-$("btn-youtube-apply-url")?.addEventListener("click", async () => {
-  if (!isLoggedIn || activeLessonId == null) {
-    setYoutubeStatus("Abra uma lição na sua conta para guardar o link.");
-    return;
-  }
-  const raw = ($("youtube-url-input")?.value || "").trim();
-  if (!raw) {
-    setYoutubeStatus("Cole um link do YouTube.");
-    return;
-  }
-  setYoutubeStatus("A guardar link…");
-  try {
-    const res = await apiFetch(
-      "/api/lessons/" + encodeURIComponent(String(activeLessonId)) + "/youtube",
-      {
-        method: "PATCH",
-        body: JSON.stringify({ url: raw }),
-      }
-    );
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      setYoutubeStatus(data.error || "Link inválido.");
-      return;
-    }
-    const ok = await mountYoutubePlayer(data.youtube_video_id, data.youtube_title || "");
-    clearYoutubeCandidates();
-    if (ok) {
-      setYoutubeStatus("Áudio pronto — ouve e acompanha a tradução.");
-      setYoutubePasteVisible(false);
-    }
-  } catch (e) {
-    setYoutubeStatus(String(e.message || e));
-  }
 });
 
 $("btn-another-random")?.addEventListener("click", () => spinRandomTraining());
