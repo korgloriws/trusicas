@@ -467,7 +467,6 @@ function syncAuthUi() {
   document.body.classList.remove("auth-pending");
   document.body.classList.toggle("is-admin", isAdmin);
   document.body.classList.toggle("is-logged-in", isLoggedIn);
-  if (typeof syncAudioCookiesButton === "function") syncAudioCookiesButton();
   document.body.classList.toggle("share-mode", shareMode);
 
   const gate = $("login-gate");
@@ -2703,25 +2702,7 @@ function destroyAudioPlayer() {
   if (label) label.textContent = "";
   clearAudioCandidates();
   setAudioStatus("");
-  setAudioCookiesPanelVisible(false);
   showStudyAudioPanel(false);
-}
-
-function setAudioCookiesPanelVisible(show) {
-  const panel = $("audio-cookies-panel");
-  if (!panel) return;
-  panel.classList.toggle("hidden", !show);
-  if (show) {
-    showStudyAudioPanel(true);
-    const btn = $("btn-audio-cookies");
-    if (btn && isLoggedIn && !shareMode) btn.classList.remove("hidden");
-  }
-}
-
-function syncAudioCookiesButton() {
-  const btn = $("btn-audio-cookies");
-  if (!btn) return;
-  btn.classList.toggle("hidden", !isLoggedIn || shareMode);
 }
 
 function mountHtmlAudioElement(host, playUrl) {
@@ -2734,8 +2715,7 @@ function mountHtmlAudioElement(host, playUrl) {
   audio.controlsList = "nodownload";
   audio.src = playUrl;
   audio.addEventListener("error", () => {
-    setAudioStatus("Falha ao reproduzir o áudio do servidor. Tente «Desbloquear YouTube».");
-    if (isLoggedIn && !shareMode) setAudioCookiesPanelVisible(true);
+    setAudioStatus("Falha ao reproduzir o áudio. Tente «Buscar áudio» para outra versão.");
   });
   audio.addEventListener("loadedmetadata", () => {
     setAudioStatus("Áudio pronto — ouve e acompanha a tradução.");
@@ -2950,9 +2930,8 @@ function mountYoutubeAudioUi(videoId) {
               }
               if (server.needs_cookies || code === 101 || code === 150) {
                 setAudioStatus(
-                  "Este vídeo não permite embed. Abre «Desbloquear YouTube», cola o cookies.txt (passos no painel) e guarda — só o admin, uma vez."
+                  "Áudio indisponível neste servidor (YouTube bloqueou). O admin precisa de YOUTUBE_COOKIES_B64 no .env da VPS — ver .env.example."
                 );
-                if (isLoggedIn && !shareMode) setAudioCookiesPanelVisible(true);
               } else {
                 setAudioStatus(
                   server.error ||
@@ -2973,7 +2952,6 @@ async function mountAudioPlayer(videoId, videoTitle) {
   studyAudioId = id;
   studyAudioTitle = videoTitle ? String(videoTitle).trim() : "";
   showStudyAudioPanel(true);
-  syncAudioCookiesButton();
   const shell = $("audio-player-shell");
   if (shell) shell.classList.remove("hidden");
   const label = $("audio-track-label");
@@ -3005,9 +2983,6 @@ async function mountAudioPlayer(videoId, videoTitle) {
     if (server.ok && server.play_url) {
       mountHtmlAudioElement(host, server.play_url);
       return true;
-    }
-    if (server.needs_cookies && isLoggedIn && !shareMode) {
-      setAudioCookiesPanelVisible(true);
     }
     return false;
   } catch (e) {
@@ -3591,47 +3566,6 @@ $("study-progress")?.addEventListener("change", async () => {
 
 $("btn-audio-search")?.addEventListener("click", () => {
   searchStudyAudio({ force: true, auto: false });
-});
-
-$("btn-audio-cookies")?.addEventListener("click", () => {
-  setAudioCookiesPanelVisible(true);
-  $("audio-cookies-input")?.focus();
-});
-
-$("btn-audio-cookies-hide")?.addEventListener("click", () => {
-  setAudioCookiesPanelVisible(false);
-});
-
-$("btn-audio-cookies-save")?.addEventListener("click", async () => {
-  if (!isLoggedIn) {
-    setAudioStatus("Inicie sessão para guardar cookies.");
-    return;
-  }
-  const text = ($("audio-cookies-input")?.value || "").trim();
-  if (!text) {
-    setAudioStatus("Cole o conteúdo completo do cookies.txt (passo 5).");
-    return;
-  }
-  setAudioStatus("A guardar cookies…");
-  try {
-    const res = await apiFetch("/api/youtube/cookies", {
-      method: "POST",
-      body: JSON.stringify({ cookies: text }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) {
-      setAudioStatus(data.error || "Não foi possível guardar os cookies.");
-      return;
-    }
-    setAudioStatus(data.message || "Cookies guardados. A recarregar áudio…");
-    if ($("audio-cookies-input")) $("audio-cookies-input").value = "";
-    setAudioCookiesPanelVisible(false);
-    if (studyAudioId) {
-      await mountAudioPlayer(studyAudioId, studyAudioTitle);
-    }
-  } catch (e) {
-    setAudioStatus(String(e.message || e));
-  }
 });
 
 $("btn-another-random")?.addEventListener("click", () => spinRandomTraining());

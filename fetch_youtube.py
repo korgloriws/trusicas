@@ -40,10 +40,9 @@ _PIPED_STREAM_APIS = (
 )
 
 _BOT_BLOCK_HINT = (
-    "O YouTube bloqueou o IP deste servidor. Cole abaixo o conteúdo do cookies.txt "
-    "(no PC: extensão «Get cookies.txt LOCALLY» em youtube.com → Export → abrir o ficheiro "
-    "no Bloco de notas → copiar tudo → colar aqui) e carregue em Guardar. "
-    "Depois volte a pedir o áudio."
+    "O YouTube bloqueou o IP deste servidor. No .env da VPS defina "
+    "YOUTUBE_COOKIES_B64 com cookies Netscape frescos (ver .env.example / "
+    "tools/cookies_to_b64.py) e reinicie o contentor."
 )
 
 
@@ -387,12 +386,10 @@ def clear_youtube_audio_mem_cache() -> None:
 
 
 def save_youtube_cookies_text(raw: str) -> tuple[bool, str]:
-    """
-    Guarda cookies Netscape colados na UI (sem criar ficheiros à mão na VPS).
-    """
+    """Guarda cookies Netscape num ficheiro interno (legado / API admin). Preferir YOUTUBE_COOKIES_B64 no .env."""
     text = str(raw or "").strip()
     if len(text) < 40:
-        return False, "Cole o conteúdo completo do cookies.txt (está demasiado curto)."
+        return False, "Conteúdo do cookies.txt demasiado curto."
     low = text.lower()
     if "youtube.com" not in low and ".youtube.com" not in low:
         return (
@@ -409,7 +406,7 @@ def save_youtube_cookies_text(raw: str) -> tuple[bool, str]:
     except OSError as e:
         return False, f"Não foi possível guardar os cookies: {e}"
     clear_youtube_audio_mem_cache()
-    return True, "Cookies guardados. Pode carregar o áudio outra vez."
+    return True, "Cookies guardados."
 
 
 def clear_youtube_cookies_file() -> tuple[bool, str]:

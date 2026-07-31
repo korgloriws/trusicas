@@ -857,14 +857,14 @@ def create_app() -> Flask:
         )
 
     @app.get("/api/youtube/cookies/status")
-    @require_login
+    @require_admin
     def api_youtube_cookies_status():
         return jsonify({"ok": True, "configured": youtube_cookies_configured()})
 
     @app.post("/api/youtube/cookies")
-    @require_login
+    @require_admin
     def api_youtube_cookies_save():
-        """Cola cookies Netscape na UI — guarda em data/ (volume Docker)."""
+        """Legado: preferir YOUTUBE_COOKIES_B64 no .env da VPS."""
         payload = request.get_json(silent=True) or {}
         raw = str(payload.get("cookies") or payload.get("text") or "")
         ok, message = save_youtube_cookies_text(raw)
@@ -873,7 +873,7 @@ def create_app() -> Flask:
         return jsonify({"ok": True, "message": message, "configured": True})
 
     @app.delete("/api/youtube/cookies")
-    @require_login
+    @require_admin
     def api_youtube_cookies_clear():
         ok, message = clear_youtube_cookies_file()
         if not ok:
