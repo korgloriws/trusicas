@@ -35,12 +35,18 @@ let activePlaylistId = null;
 let libraryProgressFilter = "";
 /** Progresso da aula aberta. */
 let studyProgress = "aprender";
-/** Audius track id da aula aberta. */
+/** YouTube video id da faixa na aula. */
 let studyAudioId = null;
-/** Título da faixa de áudio. */
+/** Título do vídeo YouTube. */
 let studyAudioTitle = "";
-/** Candidatos da última busca Audius. */
+/** Candidatos da última busca YouTube. */
 let studyAudioCandidates = [];
+/** Player IFrame API (vídeo oculto). */
+let studyYtPlayer = null;
+/** Timer da barra de progresso. */
+let studyYaTick = null;
+/** Promise de carga da YouTube IFrame API. */
+let youtubeApiPromise = null;
 
 const PROGRESS_LABELS = {
   aprender: "Aprender",
@@ -2675,20 +2681,21 @@ function destroyAudioPlayer() {
   studyAudioId = null;
   studyAudioTitle = "";
   studyAudioCandidates = [];
-  const host = $("audio-player");
-  if (host) {
-    const audio = host.querySelector("audio");
-    if (audio) {
-      try {
-        audio.pause();
-        audio.removeAttribute("src");
-        audio.load();
-      } catch (_e) {
-        /* ignore */
-      }
-    }
-    host.innerHTML = "";
+  if (studyYaTick) {
+    clearInterval(studyYaTick);
+    studyYaTick = null;
   }
+  if (studyYtPlayer) {
+    try {
+      if (typeof studyYtPlayer.stopVideo === "function") studyYtPlayer.stopVideo();
+      if (typeof studyYtPlayer.destroy === "function") studyYtPlayer.destroy();
+    } catch (_e) {
+      /* ignore */
+    }
+    studyYtPlayer = null;
+  }
+  const host = $("audio-player");
+  if (host) host.innerHTML = "";
   const shell = $("audio-player-shell");
   if (shell) shell.classList.add("hidden");
   const label = $("audio-track-label");
@@ -2698,34 +2705,187 @@ function destroyAudioPlayer() {
   showStudyAudioPanel(false);
 }
 
-function mountHtmlAudioElement(host, playUrl) {
-  host.innerHTML = "";
-  const audio = document.createElement("audio");
-  audio.id = "lesson-audio";
-  audio.className = "audio-el";
-  audio.controls = true;
-  audio.preload = "metadata";
-  audio.controlsList = "nodownload";
-  audio.src = playUrl;
-  audio.addEventListener("error", () => {
-    setAudioStatus(
-      shareMode
-        ? "Falha ao reproduzir o áudio desta partilha."
-        : "Falha ao reproduzir este áudio. Use «Buscar áudio» para outra versão."
-    );
+function ensureYoutubeIframeApi() {
+  if (window.YT && window.YT.Player) return Promise.resolve();
+  if (youtubeApiPromise) return youtubeApiPromise;
+  youtubeApiPromise = new Promise((resolve, reject) => {
+    const done = () => {
+      if (window.YT && window.YT.Player) resolve();
+      else reject(new Error("YouTube API indisponível."));
+    };
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = function () {
+      try {
+        if (typeof prev === "function") prev();
+      } catch (_e) {
+        /* ignore */
+      }
+      done();
+    };
+    if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
+      const tag = document.createElement("script");
+      tag.src = "https://www.youtube.com/iframe_api";
+      tag.async = true;
+      tag.onerror = () => reject(new Error("Falha ao carregar o YouTube."));
+      document.head.appendChild(tag);
+    }
+    let n = 0;
+    const poll = setInterval(() => {
+      n += 1;
+      if (window.YT && window.YT.Player) {
+        clearInterval(poll);
+        done();
+      } else if (n > 50) {
+        clearInterval(poll);
+        reject(new Error("Timeout ao carregar o YouTube."));
+      }
+    }, 100);
   });
-  audio.addEventListener("loadedmetadata", () => {
-    setAudioStatus("Áudio pronto — ouve e acompanha a tradução.");
-  });
-  host.appendChild(audio);
-  return audio;
+  return youtubeApiPromise;
 }
 
-async function mountAudioPlayer(trackId, trackTitle) {
-  const id = String(trackId || "").trim();
+function formatYaTime(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m + ":" + String(r).padStart(2, "0");
+}
+
+function syncYaUi() {
+  if (!studyYtPlayer || typeof studyYtPlayer.getCurrentTime !== "function") return;
+  const seek = $("ya-seek");
+  const timeEl = $("ya-time");
+  const playBtn = $("ya-play");
+  let cur = 0;
+  let dur = 0;
+  let state = -1;
+  try {
+    cur = studyYtPlayer.getCurrentTime() || 0;
+    dur = studyYtPlayer.getDuration() || 0;
+    state = studyYtPlayer.getPlayerState();
+  } catch (_e) {
+    return;
+  }
+  if (seek && !seek.matches(":active")) {
+    seek.max = String(Math.max(0, dur));
+    seek.value = String(cur);
+  }
+  if (timeEl) timeEl.textContent = formatYaTime(cur) + " / " + formatYaTime(dur);
+  if (playBtn) {
+    const playing = state === 1 || state === 3;
+    playBtn.textContent = playing ? "⏸" : "▶";
+    playBtn.setAttribute("aria-label", playing ? "Pausar" : "Reproduzir");
+  }
+}
+
+function buildYaControls(host) {
+  host.innerHTML = "";
+  const engine = document.createElement("div");
+  engine.id = "youtube-engine";
+  engine.className = "audio-engine";
+  engine.setAttribute("aria-hidden", "true");
+  const controls = document.createElement("div");
+  controls.className = "ya-controls";
+  controls.innerHTML = `
+    <button type="button" id="ya-play" class="ya-play" aria-label="Reproduzir">▶</button>
+    <input type="range" id="ya-seek" class="ya-seek" min="0" max="0" value="0" step="0.25" aria-label="Posição" />
+    <span id="ya-time" class="ya-time">0:00 / 0:00</span>
+  `;
+  host.appendChild(engine);
+  host.appendChild(controls);
+
+  $("ya-play")?.addEventListener("click", () => {
+    if (!studyYtPlayer) return;
+    try {
+      const st = studyYtPlayer.getPlayerState();
+      if (st === 1 || st === 3) studyYtPlayer.pauseVideo();
+      else studyYtPlayer.playVideo();
+    } catch (_e) {
+      /* ignore */
+    }
+    syncYaUi();
+  });
+  $("ya-seek")?.addEventListener("input", () => {
+    if (!studyYtPlayer) return;
+    const v = Number($("ya-seek").value || 0);
+    try {
+      studyYtPlayer.seekTo(v, true);
+    } catch (_e) {
+      /* ignore */
+    }
+    syncYaUi();
+  });
+}
+
+/**
+ * Player YouTube oculto + controlos nossos (só áudio na UI).
+ * Não descarrega nada — o browser do utilizador fala com o YouTube.
+ */
+function mountYoutubeAudioUi(videoId) {
+  const host = $("audio-player");
+  if (!host) return Promise.resolve(false);
+  buildYaControls(host);
+
+  return ensureYoutubeIframeApi().then(
+    () =>
+      new Promise((resolve) => {
+        let settled = false;
+        const finish = (ok) => {
+          if (settled) return;
+          settled = true;
+          resolve(ok);
+        };
+        try {
+          if (studyYtPlayer && typeof studyYtPlayer.destroy === "function") {
+            studyYtPlayer.destroy();
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+        studyYtPlayer = new window.YT.Player("youtube-engine", {
+          height: "1",
+          width: "1",
+          videoId: String(videoId),
+          host: "https://www.youtube.com",
+          playerVars: {
+            autoplay: 0,
+            controls: 0,
+            disablekb: 1,
+            fs: 0,
+            modestbranding: 1,
+            playsinline: 1,
+            rel: 0,
+            origin: window.location.origin,
+          },
+          events: {
+            onReady: () => {
+              if (studyYaTick) clearInterval(studyYaTick);
+              studyYaTick = setInterval(syncYaUi, 400);
+              syncYaUi();
+              setAudioStatus("Áudio pronto — toque ▶ para ouvir (fica na Aula).");
+              finish(true);
+            },
+            onStateChange: () => syncYaUi(),
+            onError: (ev) => {
+              const code = ev && ev.data;
+              setAudioStatus(
+                code === 101 || code === 150
+                  ? "Este vídeo bloqueia reprodução embutida. Use «Buscar áudio» para outra versão (ex.: Official Audio / Topic)."
+                  : "Não foi possível carregar este vídeo. Tente «Buscar áudio»."
+              );
+              finish(false);
+            },
+          },
+        });
+      })
+  );
+}
+
+async function mountAudioPlayer(videoId, videoTitle) {
+  const id = String(videoId || "").trim();
   if (!id) return false;
   studyAudioId = id;
-  studyAudioTitle = trackTitle ? String(trackTitle).trim() : "";
+  studyAudioTitle = videoTitle ? String(videoTitle).trim() : "";
   showStudyAudioPanel(true);
   const shell = $("audio-player-shell");
   if (shell) shell.classList.remove("hidden");
@@ -2736,16 +2896,26 @@ async function mountAudioPlayer(trackId, trackTitle) {
   const host = $("audio-player");
   if (!host) return false;
 
-  const playUrl = shareMode
-    ? "/api/share/" +
-      encodeURIComponent(String(shareToken)) +
-      "/stream/" +
-      encodeURIComponent(id)
-    : "/api/audio/stream/" + encodeURIComponent(id);
+  if (studyYaTick) {
+    clearInterval(studyYaTick);
+    studyYaTick = null;
+  }
+  if (studyYtPlayer) {
+    try {
+      if (typeof studyYtPlayer.destroy === "function") studyYtPlayer.destroy();
+    } catch (_e) {
+      /* ignore */
+    }
+    studyYtPlayer = null;
+  }
 
-  setAudioStatus("A carregar áudio…");
-  mountHtmlAudioElement(host, playUrl);
-  return true;
+  setAudioStatus("A carregar áudio do YouTube…");
+  try {
+    return await mountYoutubeAudioUi(id);
+  } catch (e) {
+    setAudioStatus(String(e.message || e));
+    return false;
+  }
 }
 
 function renderAudioCandidates(candidates, { excludeId = null } = {}) {
@@ -2754,7 +2924,7 @@ function renderAudioCandidates(candidates, { excludeId = null } = {}) {
   box.innerHTML = "";
   const skip = excludeId ? String(excludeId) : "";
   const list = (Array.isArray(candidates) ? candidates : [])
-    .filter((c) => c && (c.track_id || c.video_id) && String(c.track_id || c.video_id) !== skip)
+    .filter((c) => c && c.video_id && String(c.video_id) !== skip)
     .slice(0, 6);
   if (!list.length) {
     box.classList.add("hidden");
@@ -2766,17 +2936,23 @@ function renderAudioCandidates(candidates, { excludeId = null } = {}) {
     btn.type = "button";
     btn.className = "btn btn-secondary audio-candidate";
     btn.setAttribute("role", "listitem");
-    const tid = c.track_id || c.video_id;
-    const title = c.title || tid || "Faixa";
-    const meta = c.artist || c.channel_title || "Audius";
+    const vid = c.video_id;
+    const title = c.title || vid || "Vídeo";
+    const meta = c.channel_title || "YouTube";
     btn.innerHTML = `<span class="audio-candidate-title">${esc(title)}</span>
       <span class="audio-candidate-meta">${esc(meta)}</span>`;
     btn.addEventListener("click", async () => {
+      if (shareMode) {
+        const ok = await mountAudioPlayer(vid, title);
+        clearAudioCandidates();
+        if (ok) setAudioStatus("Áudio actualizado.");
+        return;
+      }
       if (activeLessonId == null) return;
       setAudioStatus("A guardar áudio…");
       try {
-        await saveLessonAudio(activeLessonId, tid, title);
-        const ok = await mountAudioPlayer(tid, title);
+        await saveLessonYoutube(activeLessonId, vid, title);
+        const ok = await mountAudioPlayer(vid, title);
         clearAudioCandidates();
         if (ok) setAudioStatus("Áudio actualizado.");
       } catch (e) {
@@ -2787,14 +2963,14 @@ function renderAudioCandidates(candidates, { excludeId = null } = {}) {
   }
 }
 
-async function saveLessonAudio(lessonId, trackId, trackTitle) {
+async function saveLessonYoutube(lessonId, videoId, videoTitle) {
   const res = await apiFetch(
-    "/api/lessons/" + encodeURIComponent(String(lessonId)) + "/audio",
+    "/api/lessons/" + encodeURIComponent(String(lessonId)) + "/youtube",
     {
       method: "PATCH",
       body: JSON.stringify({
-        track_id: trackId,
-        title: trackTitle || null,
+        video_id: videoId,
+        title: videoTitle || null,
       }),
     }
   );
@@ -2802,8 +2978,8 @@ async function saveLessonAudio(lessonId, trackId, trackTitle) {
   if (!res.ok || !data.ok) {
     throw new Error(data.error || "Não foi possível guardar o áudio.");
   }
-  studyAudioId = data.audio_track_id || trackId;
-  studyAudioTitle = data.audio_title || trackTitle || "";
+  studyAudioId = data.youtube_video_id || videoId;
+  studyAudioTitle = data.youtube_title || videoTitle || "";
   return data;
 }
 
@@ -2819,9 +2995,9 @@ async function searchStudyAudio({ force = false, auto = false } = {}) {
   }
   showStudyAudioPanel(true);
   clearAudioCandidates();
-  setAudioStatus(auto ? "A procurar o áudio…" : "A buscar outras versões…");
+  setAudioStatus(auto ? "A procurar no YouTube…" : "A buscar outras versões…");
   try {
-    const res = await apiFetch("/api/audio/search", {
+    const res = await apiFetch("/api/youtube/search", {
       method: "POST",
       body: JSON.stringify({
         title,
@@ -2835,7 +3011,7 @@ async function searchStudyAudio({ force = false, auto = false } = {}) {
     if (!res.ok || !data.ok) {
       setAudioStatus(
         data.error ||
-          "Não foi possível encontrar o áudio no Audius. Tente outro título/artista."
+          "Não foi possível encontrar no YouTube. Confirme YOUTUBE_API_KEY no servidor."
       );
       if (!auto) renderAudioCandidates(studyAudioCandidates);
       return;
@@ -2843,10 +3019,10 @@ async function searchStudyAudio({ force = false, auto = false } = {}) {
 
     const alreadyPlaying = Boolean(studyAudioId) && !auto;
     if (!alreadyPlaying) {
-      const ok = await mountAudioPlayer(data.track_id, data.title || "");
+      const ok = await mountAudioPlayer(data.video_id, data.title || "");
       if (!ok) {
         if (!auto) {
-          renderAudioCandidates(studyAudioCandidates, { excludeId: data.track_id });
+          renderAudioCandidates(studyAudioCandidates, { excludeId: data.video_id });
         }
         return;
       }
@@ -2854,14 +3030,14 @@ async function searchStudyAudio({ force = false, auto = false } = {}) {
 
     if (auto) {
       clearAudioCandidates();
-      setAudioStatus("Áudio pronto — ouve e acompanha a tradução.");
+      setAudioStatus("Áudio pronto — toque ▶ para ouvir (fica na Aula).");
     } else {
       renderAudioCandidates(studyAudioCandidates, {
-        excludeId: studyAudioId || data.track_id,
+        excludeId: studyAudioId || data.video_id,
       });
       setAudioStatus(
         studyAudioCandidates.length > 1
-          ? "Outras versões encontradas — toque numa para trocar."
+          ? "Outras versões no YouTube — toque numa para trocar."
           : alreadyPlaying
             ? "Não há outras versões além da actual."
             : "Áudio actualizado."
@@ -2877,10 +3053,10 @@ async function setupStudyAudio(data) {
   showStudyAudioPanel(true);
   clearAudioCandidates();
   const existingId =
-    data && data.audio_track_id ? String(data.audio_track_id).trim() : "";
+    data && data.youtube_video_id ? String(data.youtube_video_id).trim() : "";
   if (existingId) {
-    const ok = await mountAudioPlayer(existingId, data.audio_title || "");
-    if (ok) setAudioStatus("Áudio pronto — ouve e acompanha a tradução.");
+    const ok = await mountAudioPlayer(existingId, data.youtube_title || "");
+    if (ok) setAudioStatus("Áudio pronto — toque ▶ para ouvir (fica na Aula).");
     return;
   }
   if (shareMode) {
@@ -2890,7 +3066,7 @@ async function setupStudyAudio(data) {
   if (isLoggedIn && studyTitle && studyTitle !== "Sem título" && studyArtist) {
     await searchStudyAudio({ auto: true, force: false });
   } else {
-    setAudioStatus("Defina título e artista para buscar o áudio automaticamente.");
+    setAudioStatus("Defina título e artista para buscar automaticamente no YouTube.");
   }
 }
 
