@@ -13,7 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-docker.txt ./
-RUN pip install --upgrade pip && pip install -r requirements-docker.txt
+RUN pip install --upgrade pip \
+    && pip install -r requirements-docker.txt \
+    && pip install -U "yt-dlp>=2025.8.11"
 
 # Todos os módulos .py na raiz (evita esquecer ficheiros novos, ex. translation_stanzas.py)
 COPY *.py ./

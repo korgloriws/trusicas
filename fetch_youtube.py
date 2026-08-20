@@ -21,11 +21,27 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 _AUDIO_CACHE_DIR = _PROJECT_ROOT / "data" / "yt_audio"
 _ENV_COOKIES_PATH = _PROJECT_ROOT / "data" / ".youtube.cookies.from_env.txt"
 
-# Clientes yt-dlp — em VPS o «web» costuma pedir login anti-bot; android/ios/tv falham menos.
+# Clientes yt-dlp — () = default do yt-dlp; mobile/tv costumam falhar menos em VPS.
 _PLAYER_CLIENT_ATTEMPTS: tuple[tuple[str, ...], ...] = (
-    ("android_music", "android", "ios"),
+    (),
+    ("android",),
+    ("ios",),
+    ("tv",),
+    ("mweb",),
+    ("android_music", "android"),
     ("tv_embedded", "tv"),
-    ("mweb", "web"),
+    ("web",),
+)
+
+# None = não forçar format (deixa o yt-dlp escolher).
+_FORMAT_ATTEMPTS: tuple[str | None, ...] = (
+    None,
+    "bestaudio/best",
+    "ba/b",
+    "140/251/250/249/bestaudio/best",
+    "18/22/bestaudio/best",
+    "best",
+    "worst",
 )
 
 # Instâncias públicas (falham com frequência; só fallback).
@@ -509,13 +525,30 @@ def _result_from_cache(path: Path, *, title: str | None = None) -> YoutubeAudioR
     )
 
 
-# Formatos: clientes mobile por vezes não têm m4a/webm “bestaudio” clássico.
-_FORMAT_ATTEMPTS: tuple[str, ...] = (
-    "bestaudio/best",
-    "ba/b",
-    "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-    "best",
-)
+def _ytdlp_base_opts(
+    *,
+    outtmpl: str,
+    cookies_file: str | None,
+    proxy: str | None,
+    clients: tuple[str, ...],
+    fmt: str | None,
+) -> dict[str, Any]:
+    ydl_opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "outtmpl": outtmpl,
+        "overwrites": True,
+    }
+    if fmt:
+        ydl_opts["format"] = fmt
+    if clients:
+        ydl_opts["extractor_args"] = {"youtube": {"player_client": list(clients)}}
+    if cookies_file:
+        ydl_opts["cookiefile"] = cookies_file
+    if proxy:
+        ydl_opts["proxy"] = proxy
+    return ydl_opts
 
 
 def _download_with_ytdlp(vid: str) -> YoutubeAudioResult:
@@ -538,19 +571,13 @@ def _download_with_ytdlp(vid: str) -> YoutubeAudioResult:
 
     for clients in _PLAYER_CLIENT_ATTEMPTS:
         for fmt in _FORMAT_ATTEMPTS:
-            ydl_opts: dict[str, Any] = {
-                "format": fmt,
-                "quiet": True,
-                "no_warnings": True,
-                "noplaylist": True,
-                "outtmpl": outtmpl,
-                "overwrites": True,
-                "extractor_args": {"youtube": {"player_client": list(clients)}},
-            }
-            if cookies_file:
-                ydl_opts["cookiefile"] = cookies_file
-            if proxy:
-                ydl_opts["proxy"] = proxy
+            ydl_opts = _ytdlp_base_opts(
+                outtmpl=outtmpl,
+                cookies_file=cookies_file,
+                proxy=proxy,
+                clients=clients,
+                fmt=fmt,
+            )
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(page_url, download=True)
@@ -892,93 +919,42 @@ def convert_share_link_to_mp3(url_or_id: str) -> YoutubeAudioResult:
         _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
         return result
 
-    try:
-        import yt_dlp
-    except ImportError:
-        return YoutubeAudioResult(
-            ok=False,
-            error="Dependência yt-dlp em falta. Instale com: pip install yt-dlp",
-        )
+    # Já há m4a/webm em cache → só remux
+    existing = _find_cached_audio(vid)
+    if existing and existing.suffix.lower() != ".mp3":
+        remuxed = _ffmpeg_to_mp3(existing, mp3_path)
+        if remuxed.ok:
+            _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, remuxed)
+            return remuxed
 
-    page_url = f"https://www.youtube.com/watch?v={vid}"
-    cookies_file = _resolve_cookies_file()
-    proxy = _youtube_proxy()
-    _AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    outtmpl = str(_AUDIO_CACHE_DIR / f"{vid}.%(ext)s")
-    last_error = ""
-    saw_bot_block = False
+    # 1) Download com fallbacks de cliente/formato (sem postprocessor ffmpeg do yt-dlp)
+    downloaded = _download_with_ytdlp(vid)
+    if not downloaded.ok:
+        piped = _download_via_piped(vid)
+        if piped.ok:
+            downloaded = piped
+        else:
+            return downloaded
 
-    for clients in _PLAYER_CLIENT_ATTEMPTS:
-        for fmt in _FORMAT_ATTEMPTS:
-            ydl_opts: dict[str, Any] = {
-                "format": fmt,
-                "quiet": True,
-                "no_warnings": True,
-                "noplaylist": True,
-                "outtmpl": outtmpl,
-                "overwrites": True,
-                "extractor_args": {"youtube": {"player_client": list(clients)}},
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192",
-                    }
-                ],
-            }
-            if cookies_file:
-                ydl_opts["cookiefile"] = cookies_file
-            if proxy:
-                ydl_opts["proxy"] = proxy
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(page_url, download=True)
-            except Exception as e:
-                last_error = str(e)
-                if _is_bot_block_error(last_error):
-                    saw_bot_block = True
-                for junk in _AUDIO_CACHE_DIR.glob(f"{vid}.*"):
-                    if junk.suffix == ".part" or junk.stat().st_size < 512:
-                        try:
-                            junk.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-                continue
+    title = downloaded.title
+    # Já veio mp3
+    if str(downloaded.ext or "").lower() == "mp3" and downloaded.local_path:
+        _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, downloaded)
+        return downloaded
 
-            if mp3_path.is_file() and mp3_path.stat().st_size > 1024:
-                title = None
-                if isinstance(info, dict):
-                    title = str(info.get("title") or "").strip() or None
-                result = _result_from_cache(mp3_path, title=title)
-                _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
-                return result
+    src = Path(downloaded.local_path) if downloaded.local_path else None
+    if src and src.is_file():
+        remuxed = _ffmpeg_to_mp3(src, mp3_path)
+        if remuxed.ok:
+            remuxed.title = title or remuxed.title
+            _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, remuxed)
+            return remuxed
+        # Serve o ficheiro original (m4a/webm) se o remux falhar
+        _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, downloaded)
+        return downloaded
 
-            cached = _find_cached_audio(vid)
-            if cached:
-                remuxed = _ffmpeg_to_mp3(cached, mp3_path)
-                if remuxed.ok:
-                    if isinstance(info, dict):
-                        remuxed.title = str(info.get("title") or "").strip() or remuxed.title
-                    _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, remuxed)
-                    return remuxed
-                result = _result_from_cache(cached)
-                _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
-                return result
-            last_error = "yt-dlp não gravou o MP3."
-
-    if saw_bot_block and not cookies_file:
-        return YoutubeAudioResult(ok=False, error=_BOT_BLOCK_HINT)
-    if saw_bot_block:
-        return YoutubeAudioResult(
-            ok=False,
-            error=(
-                "O YouTube ainda bloqueia o áudio mesmo com cookies. "
-                "Actualize data/youtube.cookies.txt e reinicie. "
-                f"Detalhe: {last_error}"
-            ),
-        )
     return YoutubeAudioResult(
         ok=False,
-        error=f"Não foi possível converter para MP3: {last_error or 'erro desconhecido'}",
+        error=downloaded.error or "Não foi possível converter para MP3.",
     )
 
