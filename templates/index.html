@@ -118,60 +118,78 @@
     </div>
   </div>
 
-  <header class="hero" id="site-header">
-    <div class="hero-shell">
-      <div id="admin-active-bar" class="admin-active-bar hidden" role="status" aria-live="polite">
-        Conta administrador — gestão de utilizadores activa
-      </div>
-      <div class="hero-inner">
-        <div class="brand">
-          <img
-            class="brand-logo"
-            src="{{ url_for('static', filename='image/trusicas-logo.png') }}"
-            alt="{{ app_name }}"
-            width="160"
-            height="160"
-            decoding="async"
-          />
-          <p class="brand-tagline">{{ app_tagline }}</p>
-        </div>
-
-        <div id="admin-auth" class="admin-corner" aria-label="Conta">
-          <div id="admin-auth-user" class="admin-signed hidden">
-            <span id="user-display-pill" class="admin-signed-pill" title="Conta activa">—</span>
-            <button type="button" id="btn-open-settings" class="btn btn-sm btn-secondary">Conta</button>
-            <button type="button" id="btn-open-users" class="btn btn-sm btn-secondary hidden">Utilizadores</button>
-            <button type="button" id="btn-admin-logout" class="btn btn-sm btn-secondary">Sair</button>
-          </div>
-        </div>
-
-        <div class="hero-toolbar">
-          <nav class="segmented" aria-label="Navegação principal">
-            <button type="button" class="segmented-btn active" data-view="create">Nova lição</button>
-            <button type="button" class="segmented-btn" data-view="study">Aula</button>
-            <button type="button" class="segmented-btn" data-view="library">Biblioteca</button>
-          </nav>
-          <div class="segmented theme-bar" role="group" aria-label="Tema da interface">
-            <button type="button" class="segmented-btn theme-choice" data-theme="dark" aria-pressed="true">
-              Escuro
-            </button>
-            <button type="button" class="segmented-btn theme-choice" data-theme="light" aria-pressed="false">
-              Claro
-            </button>
-          </div>
+  <div id="app-frame" class="ym-frame">
+    <aside class="ym-rail" aria-label="Menu">
+      <div class="ym-rail-brand">
+        <img
+          class="ym-rail-logo"
+          src="{{ url_for('static', filename='image/trusicas-logo.png') }}"
+          alt="{{ app_name }}"
+          width="140"
+          height="48"
+          decoding="async"
+        />
+        <div class="ym-rail-brand-text">
+          <span class="ym-rail-name">{{ app_name }}</span>
+          <span class="ym-rail-tag">{{ app_tagline }}</span>
         </div>
       </div>
-    </div>
-  </header>
+      <nav class="ym-rail-nav" aria-label="Navegação principal">
+        <button type="button" class="ym-nav-btn" data-view="library">
+          <span class="ym-nav-ico" aria-hidden="true">⌂</span>
+          <span>Início</span>
+        </button>
+        <button type="button" class="ym-nav-btn active" data-view="create">
+          <span class="ym-nav-ico" aria-hidden="true">＋</span>
+          <span>Nova lição</span>
+        </button>
+        <button type="button" class="ym-nav-btn" data-view="study">
+          <span class="ym-nav-ico" aria-hidden="true">♪</span>
+          <span>Em aula</span>
+        </button>
+      </nav>
+      <div class="ym-rail-foot">
+        <div class="segmented theme-bar ym-theme" role="group" aria-label="Tema">
+          <button type="button" class="segmented-btn theme-choice" data-theme="dark" aria-pressed="true">Escuro</button>
+          <button type="button" class="segmented-btn theme-choice" data-theme="light" aria-pressed="false">Claro</button>
+        </div>
+      </div>
+    </aside>
 
-  <div id="admin-toast" class="admin-toast hidden" role="status" aria-live="polite"></div>
+    <div class="ym-column">
+      <header class="ym-topbar" id="site-header">
+        <div id="admin-active-bar" class="admin-active-bar hidden" role="status" aria-live="polite">
+          Conta administrador — gestão de utilizadores activa
+        </div>
+        <div class="ym-topbar-inner">
+          <div class="ym-topbar-brand">
+            <img
+              class="ym-topbar-logo"
+              src="{{ url_for('static', filename='image/trusicas-logo.png') }}"
+              alt="{{ app_name }}"
+              width="120"
+              height="40"
+              decoding="async"
+            />
+            <p class="ym-topbar-greeting" id="ym-greeting">Inglês com a música que você ouve</p>
+          </div>
+          <div id="admin-auth" class="admin-corner ym-topbar-auth" aria-label="Conta">
+            <div id="admin-auth-user" class="admin-signed hidden">
+              <span id="user-display-pill" class="admin-signed-pill" title="Conta activa">—</span>
+              <button type="button" id="btn-open-settings" class="btn btn-sm btn-secondary">Conta</button>
+              <button type="button" id="btn-open-users" class="btn btn-sm btn-secondary hidden">Utilizadores</button>
+              <button type="button" id="btn-admin-logout" class="btn btn-sm btn-secondary">Sair</button>
+            </div>
+          </div>
+        </div>
+      </header>
 
-  <main class="shell" id="app-shell">
+      <main class="ym-content shell" id="app-shell">
     <div id="view-create">
       <section class="surface form-surface" id="create-form-surface">
         <div class="surface-head">
-          <h2 class="surface-title">Criar lição</h2>
-          <p class="surface-desc">Cole a letra ou busque pelo título e artista. A busca pode trazer erros — revise sempre antes de gerar.</p>
+          <h2 class="surface-title">Nova lição</h2>
+          <p class="surface-desc">Cole a letra ou busque pelo título e artista — depois estude com o áudio na barra de baixo.</p>
         </div>
         <div id="edit-mode-banner" class="edit-mode-banner hidden" role="status">
           <p id="edit-mode-banner-text" class="edit-mode-banner-text"></p>
@@ -268,26 +286,33 @@
     </div>
 
     <div id="view-study" class="hidden">
-      <section class="surface study-surface">
-        <div class="study-head">
-          <div class="study-head-copy">
-            <p class="study-kicker">Aula</p>
-            <h2 id="study-song-title" class="surface-title">Nenhuma aula aberta</h2>
-            <p id="study-song-meta" class="surface-desc">Abra uma música na Biblioteca ou gere uma nova lição.</p>
+      <section class="ym-now-hero study-surface">
+        <div class="ym-now-main">
+          <div class="ym-now-art" aria-hidden="true">
+            <div class="ym-now-disc" id="ym-now-disc">
+              <span class="ym-now-disc-note">♪</span>
+            </div>
           </div>
-          <div class="study-head-actions">
-            <label class="study-progress-field">
-              <span class="study-progress-label">Progresso</span>
-              <select id="study-progress" class="input study-progress-select" disabled aria-label="Estado de progresso da música">
-                <option value="aprender">Aprender</option>
-                <option value="aprendendo">Aprendendo</option>
-                <option value="ja_sei">Já sei</option>
-              </select>
-            </label>
-            <button type="button" id="btn-study-share" class="btn btn-secondary btn-sm hidden">Partilhar</button>
-            <button type="button" id="btn-study-edit" class="btn btn-secondary btn-sm hidden">Editar</button>
-            <button type="button" id="btn-study-new-lesson" class="btn btn-secondary btn-sm">Nova lição</button>
-            <button type="button" id="btn-study-library" class="btn btn-secondary btn-sm">Biblioteca</button>
+          <div class="study-head ym-now-meta">
+            <div class="study-head-copy">
+              <p class="study-kicker">Em aula · letra + idioma</p>
+              <h2 id="study-song-title" class="surface-title study-now-title">Nenhuma aula aberta</h2>
+              <p id="study-song-meta" class="surface-desc">Abra uma música na Biblioteca ou gere uma nova lição.</p>
+            </div>
+            <div class="study-head-actions">
+              <label class="study-progress-field">
+                <span class="study-progress-label">Progresso</span>
+                <select id="study-progress" class="input study-progress-select" disabled aria-label="Estado de progresso da música">
+                  <option value="aprender">Aprender</option>
+                  <option value="aprendendo">Aprendendo</option>
+                  <option value="ja_sei">Já sei</option>
+                </select>
+              </label>
+              <button type="button" id="btn-study-share" class="btn btn-secondary btn-sm hidden">Partilhar</button>
+              <button type="button" id="btn-study-edit" class="btn btn-secondary btn-sm hidden">Editar</button>
+              <button type="button" id="btn-study-new-lesson" class="btn btn-secondary btn-sm">Nova lição</button>
+              <button type="button" id="btn-study-library" class="btn btn-secondary btn-sm">Biblioteca</button>
+            </div>
           </div>
         </div>
         <div id="share-mode-banner" class="share-mode-banner hidden" role="status">
@@ -307,11 +332,11 @@
         <p id="study-status" class="pill-status pill-status-block" aria-live="polite"></p>
       </section>
 
-      <section id="study-audio" class="surface audio-surface hidden" aria-label="Áudio da música">
+      <section id="study-audio" class="ym-audio-tools hidden" aria-label="Ferramentas de áudio">
         <div class="audio-head">
           <div class="audio-head-copy">
-            <h3 class="audio-title">Áudio da música</h3>
-            <p class="audio-desc">Busca a faixa e converte o áudio (MP3) para ouvir na Aula.</p>
+            <h3 class="audio-title">Fonte do áudio</h3>
+            <p class="audio-desc">Busca e converte a faixa oficial para estudar com a letra.</p>
           </div>
           <div class="audio-head-actions">
             <button type="button" id="btn-audio-search" class="btn btn-secondary btn-sm">Buscar áudio</button>
@@ -320,12 +345,6 @@
         <div id="audio-loading" class="audio-loading hidden" role="status" aria-live="polite">
           <span class="audio-loading-spinner" aria-hidden="true"></span>
           <span id="audio-loading-text">A buscar e converter áudio…</span>
-        </div>
-        <div id="audio-player-shell" class="audio-player-shell hidden">
-          <div class="audio-player-frame">
-            <div id="audio-player"></div>
-          </div>
-          <p id="audio-track-label" class="audio-track-label muted"></p>
         </div>
         <div id="audio-candidates" class="audio-candidates hidden" role="list"></div>
         <p id="audio-status" class="pill-status pill-status-block" aria-live="polite"></p>
@@ -360,8 +379,8 @@
       <section class="surface">
         <div class="library-head">
           <div>
-            <h2 class="surface-title">Biblioteca</h2>
-            <p class="surface-desc">Organize músicas em listas, acompanhe o progresso (Aprender → Aprendendo → Já sei) e use o treino aleatório.</p>
+            <h2 class="surface-title">A sua biblioteca</h2>
+            <p class="surface-desc">Como no YouTube Music — listas, progresso e treino aleatório. Toque numa faixa para estudar.</p>
           </div>
           <div class="library-head-controls">
             <label class="visually-hidden" for="library-search">Buscar na biblioteca</label>
@@ -453,6 +472,80 @@
       </section>
     </div>
   </main>
+
+      <footer id="ym-player" class="ym-player is-empty" aria-label="Reprodutor">
+        <button type="button" class="ym-player-handle" id="ym-player-expand" aria-label="Abrir Em aula">
+          <span class="ym-player-handle-bar" aria-hidden="true"></span>
+        </button>
+        <div class="ym-player-left" id="ym-player-open-study" role="button" tabindex="0" aria-label="Abrir Em aula">
+          <div class="ym-player-art" aria-hidden="true">
+            <span class="ym-player-art-glyph">♪</span>
+          </div>
+          <div class="ym-player-meta">
+            <p id="audio-track-label" class="ym-player-title">Nenhuma faixa</p>
+            <p class="ym-player-sub" id="ym-player-sub">Abra uma aula para ouvir e estudar</p>
+          </div>
+        </div>
+
+        <div class="ym-player-center">
+          <div class="ym-player-transport" role="group" aria-label="Controlos">
+            <button type="button" id="ym-btn-play" class="ym-ctrl ym-ctrl-play" aria-label="Reproduzir" disabled>
+              <span class="ym-ctrl-icon ym-icon-play" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div class="ym-player-timeline">
+            <span id="ym-time-cur" class="ym-time">0:00</span>
+            <label class="ym-seek-wrap" for="ym-seek">
+              <span class="visually-hidden">Posição</span>
+              <input
+                type="range"
+                id="ym-seek"
+                class="ym-seek"
+                min="0"
+                max="0"
+                value="0"
+                step="0.1"
+                disabled
+                aria-valuemin="0"
+                aria-valuemax="0"
+                aria-valuenow="0"
+              />
+            </label>
+            <span id="ym-time-dur" class="ym-time">0:00</span>
+          </div>
+        </div>
+
+        <div class="ym-player-right">
+          <label class="ym-vol-wrap" for="ym-volume" title="Volume">
+            <span class="ym-vol-ico" aria-hidden="true">♪</span>
+            <span class="visually-hidden">Volume</span>
+            <input type="range" id="ym-volume" class="ym-volume" min="0" max="1" step="0.01" value="1" />
+          </label>
+        </div>
+
+        <div id="audio-player-shell" class="audio-player-shell ym-player-shell">
+          <div id="audio-player" class="ym-player-mount"></div>
+        </div>
+      </footer>
+
+      <nav id="mobile-dock" class="ym-bottom-nav" aria-label="Navegação principal">
+        <button type="button" class="ym-bottom-btn" data-view="library">
+          <span class="ym-nav-ico" aria-hidden="true">⌂</span>
+          <span>Início</span>
+        </button>
+        <button type="button" class="ym-bottom-btn active" data-view="create">
+          <span class="ym-nav-ico" aria-hidden="true">＋</span>
+          <span>Nova</span>
+        </button>
+        <button type="button" class="ym-bottom-btn" data-view="study">
+          <span class="ym-nav-ico" aria-hidden="true">♪</span>
+          <span>Em aula</span>
+        </button>
+      </nav>
+    </div>
+  </div>
+
+  <div id="admin-toast" class="admin-toast hidden" role="status" aria-live="polite"></div>
 
   <div id="train-roulette" class="train-roulette-overlay hidden" aria-live="polite" aria-atomic="true" hidden>
     <div class="train-roulette-card">

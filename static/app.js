@@ -474,10 +474,15 @@ function syncAuthUi() {
   const gate = $("login-gate");
   const shell = $("app-shell");
   const header = $("site-header");
+  const frame = $("app-frame");
   const showApp = isLoggedIn || shareMode;
   if (gate) {
     gate.hidden = showApp;
     gate.classList.toggle("hidden", showApp);
+  }
+  if (frame) {
+    frame.hidden = !showApp;
+    frame.classList.toggle("hidden", !showApp);
   }
   if (shell) {
     shell.hidden = !showApp;
@@ -823,6 +828,9 @@ function syncStudyHeader() {
       progressEl.value = "aprender";
       progressEl.disabled = true;
     }
+    if (!studyAudioId) {
+      syncYmPlayerMeta({ title: "", sub: "Abra uma aula para ouvir e estudar" });
+    }
     return;
   }
   const title = studyTitle || "Sem título";
@@ -839,6 +847,17 @@ function syncStudyHeader() {
         ? `${artist} · ${prog} · lição #${activeLessonId}`
         : `${prog} · lição #${activeLessonId}`;
     }
+  }
+  if (!studyAudioId) {
+    syncYmPlayerMeta({
+      title,
+      sub: artist ? `${artist} · abra o áudio na barra` : "Aula aberta · busque o áudio",
+    });
+  } else if (studyAudioTitle) {
+    syncYmPlayerMeta({
+      title: studyAudioTitle,
+      sub: artist ? `${artist} · Trusicas` : "A estudar com a letra",
+    });
   }
   if (editBtn) editBtn.classList.toggle("hidden", !isLoggedIn || shareMode);
   if (shareBtn) {
@@ -1463,9 +1482,20 @@ function setView(name, { freshCreate = false } = {}) {
   const create = $("view-create");
   const study = $("view-study");
   const lib = $("view-library");
-  document.querySelectorAll(".segmented-btn[data-view]").forEach((b) => {
+  document.querySelectorAll(".ym-nav-btn[data-view], .ym-bottom-btn[data-view], .segmented-btn[data-view]").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === name);
   });
+  document.body.dataset.view = name;
+  document.body.classList.toggle("view-study", name === "study" || (name === "create" && editingLessonId != null));
+  document.body.classList.toggle("view-library", name === "library");
+  document.body.classList.toggle("view-create", name === "create");
+
+  const greet = $("ym-greeting");
+  if (greet) {
+    if (name === "library") greet.textContent = "A sua biblioteca · músicas e progresso";
+    else if (name === "study") greet.textContent = "Em aula · letra e idioma na mesma vista";
+    else greet.textContent = "Inglês com a música que você ouve";
+  }
 
   // Em edição: formulário (create) + conteúdo (study) juntos.
   const editing = editingLessonId != null;
@@ -1493,13 +1523,269 @@ function setView(name, { freshCreate = false } = {}) {
   if (name === "study" || (name === "create" && editing)) syncStudyHeader();
 }
 
-document.querySelectorAll(".segmented-btn[data-view]").forEach((b) => {
+document.querySelectorAll(".ym-nav-btn[data-view], .ym-bottom-btn[data-view], .segmented-btn[data-view]").forEach((b) => {
   b.addEventListener("click", () => {
     const view = b.dataset.view;
     if (view === "create") setView("create", { freshCreate: true });
     else setView(view);
   });
 });
+
+function syncYmPlayerMeta({ title = "", sub = "" } = {}) {
+  const label = $("audio-track-label");
+  const subEl = $("ym-player-sub");
+  const player = $("ym-player");
+  const hasTrack = Boolean(title && String(title).trim());
+  if (label) {
+    label.textContent = hasTrack ? String(title).trim() : "Nenhuma faixa";
+  }
+  if (subEl) {
+    subEl.textContent = sub || (hasTrack ? "A estudar com a letra" : "Abra uma aula para ouvir e estudar");
+  }
+  if (player) player.classList.toggle("is-empty", !hasTrack && !studyAudioId);
+  syncYmPlayerChrome();
+}
+
+function formatAudioClock(sec) {
+  const n = Number(sec);
+  if (!Number.isFinite(n) || n < 0) return "0:00";
+  const s = Math.floor(n % 60);
+  const m = Math.floor(n / 60) % 60;
+  const h = Math.floor(n / 3600);
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+let ymSeekDragging = false;
+
+function getLessonAudioEl() {
+  return document.getElementById("lesson-audio");
+}
+
+function syncYmPlayerChrome() {
+  const audio = getLessonAudioEl();
+  const playBtn = $("ym-btn-play");
+  const seek = $("ym-seek");
+  const cur = $("ym-time-cur");
+  const dur = $("ym-time-dur");
+  const player = $("ym-player");
+  const ready = Boolean(audio && audio.src);
+  const duration = audio && Number.isFinite(audio.duration) ? audio.duration : 0;
+  const current = audio && Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+  const playing = Boolean(audio && !audio.paused && !audio.ended);
+
+  if (playBtn) {
+    playBtn.disabled = !ready;
+    playBtn.setAttribute("aria-label", playing ? "Pausar" : "Reproduzir");
+    playBtn.classList.toggle("is-playing", playing);
+  }
+  if (seek) {
+    seek.disabled = !ready || duration <= 0;
+    if (!ymSeekDragging && !seek.matches(":active") && document.activeElement !== seek) {
+      seek.max = duration > 0 ? String(duration) : "0";
+      seek.value = String(current);
+    }
+    seek.setAttribute("aria-valuemax", seek.max);
+    seek.setAttribute("aria-valuenow", seek.value);
+    const pct = duration > 0 ? ((Number(seek.value) || 0) / duration) * 100 : 0;
+    seek.style.setProperty("--ym-seek-pct", `${pct}%`);
+  }
+  if (cur && !ymSeekDragging) cur.textContent = formatAudioClock(current);
+  if (dur) dur.textContent = formatAudioClock(duration);
+  if (player) {
+    player.classList.toggle("is-playing", playing);
+    player.classList.toggle("has-audio", ready);
+  }
+}
+
+function bindYmPlayerUi() {
+  if (bindYmPlayerUi._done) return;
+  bindYmPlayerUi._done = true;
+  const playBtn = $("ym-btn-play");
+  const seek = $("ym-seek");
+  const vol = $("ym-volume");
+
+  playBtn?.addEventListener("click", () => {
+    const audio = getLessonAudioEl();
+    if (!audio) return;
+    if (audio.paused) {
+      audio.play().catch(() => {
+        setAudioStatus("Toque em reproduzir novamente para iniciar o áudio.");
+      });
+    } else {
+      audio.pause();
+    }
+  });
+
+  const endSeek = () => {
+    const audio = getLessonAudioEl();
+    if (!audio || !seek) {
+      ymSeekDragging = false;
+      return;
+    }
+    const t = Number(seek.value);
+    if (Number.isFinite(t)) audio.currentTime = t;
+    ymSeekDragging = false;
+    syncYmPlayerChrome();
+  };
+  seek?.addEventListener("pointerdown", () => {
+    ymSeekDragging = true;
+  });
+  seek?.addEventListener("pointerup", endSeek);
+  seek?.addEventListener("change", endSeek);
+  seek?.addEventListener("input", () => {
+    if (!seek) return;
+    ymSeekDragging = true;
+    const max = Number(seek.max) || 0;
+    const val = Number(seek.value) || 0;
+    const pct = max > 0 ? (val / max) * 100 : 0;
+    seek.style.setProperty("--ym-seek-pct", `${pct}%`);
+    const cur = $("ym-time-cur");
+    if (cur) cur.textContent = formatAudioClock(val);
+  });
+
+  vol?.addEventListener("input", () => {
+    const audio = getLessonAudioEl();
+    if (!audio || !vol) return;
+    audio.volume = Number(vol.value);
+    vol.style.setProperty("--ym-vol-pct", `${Number(vol.value) * 100}%`);
+  });
+  if (vol) vol.style.setProperty("--ym-vol-pct", "100%");
+}
+
+function openEmAulaFromPlayer() {
+  setView("study");
+  const study = $("view-study");
+  if (study) {
+    try {
+      study.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+}
+
+function bindYmPlayerExpandGesture() {
+  if (bindYmPlayerExpandGesture._done) return;
+  bindYmPlayerExpandGesture._done = true;
+  const player = $("ym-player");
+  if (!player) return;
+
+  const handle = $("ym-player-expand");
+  const openHit = $("ym-player-open-study");
+
+  const go = () => openEmAulaFromPlayer();
+  handle?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    go();
+  });
+  openHit?.addEventListener("click", (ev) => {
+    if (ev.target.closest("button, a, input, label")) return;
+    go();
+  });
+  openHit?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      go();
+    }
+  });
+
+  let startY = 0;
+  let startX = 0;
+  let dragging = false;
+  let activePointer = null;
+  const threshold = 56;
+
+  const resetTransform = () => {
+    player.classList.remove("is-dragging", "is-expanding");
+    player.style.transform = "";
+  };
+
+  const onPointerDown = (ev) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    const t = ev.target;
+    if (!(t instanceof Element)) return;
+    if (t.closest("button.ym-ctrl, input, label.ym-seek-wrap, label.ym-vol-wrap, .ym-player-right")) {
+      return;
+    }
+    activePointer = ev.pointerId;
+    startY = ev.clientY;
+    startX = ev.clientX;
+    dragging = false;
+    try {
+      player.setPointerCapture(ev.pointerId);
+    } catch (_e) {
+      /* ignore */
+    }
+  };
+
+  const onPointerMove = (ev) => {
+    if (activePointer == null || ev.pointerId !== activePointer) return;
+    const dy = startY - ev.clientY;
+    const dx = Math.abs(ev.clientX - startX);
+    if (!dragging) {
+      if (dy < 10 && Math.abs(dy) < 10) return;
+      if (dx > Math.abs(dy) + 6) {
+        activePointer = null;
+        resetTransform();
+        return;
+      }
+      if (dy > 8) {
+        dragging = true;
+        player.classList.add("is-dragging");
+      } else {
+        return;
+      }
+    }
+    ev.preventDefault();
+    const lift = Math.min(Math.max(dy, 0), 140);
+    player.style.transform = `translateY(${-lift * 0.45}px)`;
+  };
+
+  const onPointerUp = (ev) => {
+    if (activePointer == null || ev.pointerId !== activePointer) return;
+    const dy = startY - ev.clientY;
+    const wasDragging = dragging;
+    activePointer = null;
+    dragging = false;
+    try {
+      player.releasePointerCapture(ev.pointerId);
+    } catch (_e) {
+      /* ignore */
+    }
+    if (wasDragging && dy >= threshold) {
+      player.classList.add("is-expanding");
+      window.setTimeout(() => {
+        resetTransform();
+        go();
+      }, 160);
+      return;
+    }
+    resetTransform();
+  };
+
+  player.addEventListener("pointerdown", onPointerDown);
+  player.addEventListener("pointermove", onPointerMove, { passive: false });
+  player.addEventListener("pointerup", onPointerUp);
+  player.addEventListener("pointercancel", onPointerUp);
+}
+
+function wireLessonAudioUi(audio) {
+  if (!audio) return;
+  bindYmPlayerUi();
+  const vol = $("ym-volume");
+  if (vol) audio.volume = Number(vol.value);
+  const onTick = () => syncYmPlayerChrome();
+  audio.addEventListener("timeupdate", onTick);
+  audio.addEventListener("loadedmetadata", onTick);
+  audio.addEventListener("durationchange", onTick);
+  audio.addEventListener("play", onTick);
+  audio.addEventListener("pause", onTick);
+  audio.addEventListener("ended", onTick);
+  audio.addEventListener("waiting", onTick);
+  audio.addEventListener("canplay", onTick);
+  syncYmPlayerChrome();
+}
 
 function normalizeLyricsNewlines(text) {
   return String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -2708,14 +2994,14 @@ function clearStudyAudioPlayback() {
   const host = $("audio-player");
   if (host) host.innerHTML = "";
   const shell = $("audio-player-shell");
-  if (shell) shell.classList.add("hidden");
-  const label = $("audio-track-label");
-  if (label) label.textContent = "";
+  if (shell) shell.classList.remove("hidden");
   studyAudioId = null;
   studyAudioTitle = "";
   studyAudioCandidates = [];
   clearAudioCandidates();
   setAudioStatus("");
+  syncYmPlayerMeta({ title: "", sub: "Abra uma aula para ouvir e estudar" });
+  syncYmPlayerChrome();
 }
 
 function destroyAudioPlayer() {
@@ -2729,18 +3015,26 @@ function mountHtmlAudioElement(host, playUrl) {
   host.innerHTML = "";
   const audio = document.createElement("audio");
   audio.id = "lesson-audio";
-  audio.className = "audio-el";
-  audio.controls = true;
+  audio.className = "audio-el ym-audio-hidden";
+  audio.controls = false;
   audio.preload = "metadata";
-  audio.controlsList = "nodownload";
+  audio.playsInline = true;
   audio.src = playUrl;
   audio.addEventListener("error", () => {
     setAudioStatus("Falha ao reproduzir o áudio. Tente «Buscar áudio» para outra versão.");
+    syncYmPlayerChrome();
   });
   audio.addEventListener("loadedmetadata", () => {
     setAudioStatus("Áudio pronto — ouve e acompanha a tradução.");
+    syncYmPlayerChrome();
   });
   host.appendChild(audio);
+  wireLessonAudioUi(audio);
+  const playBtn = $("ym-btn-play");
+  if (playBtn) playBtn.disabled = false;
+  audio.play().catch(() => {
+    /* autoplay pode ser bloqueado — o utilizador usa o botão */
+  });
   return audio;
 }
 
@@ -2981,6 +3275,10 @@ async function mountAudioPlayer(videoId, videoTitle, { expectedSeq = null } = {}
   if (label) {
     label.textContent = studyAudioTitle ? studyAudioTitle : `Faixa · ${id}`;
   }
+  syncYmPlayerMeta({
+    title: studyAudioTitle || `Faixa · ${id}`,
+    sub: studyArtist ? `${studyArtist} · Trusicas` : "A estudar com a letra",
+  });
   const host = $("audio-player");
   if (!host) return false;
 
@@ -3005,6 +3303,10 @@ async function mountAudioPlayer(videoId, videoTitle, { expectedSeq = null } = {}
       if (server.title && !studyAudioTitle) {
         studyAudioTitle = server.title;
         if (label) label.textContent = studyAudioTitle;
+        syncYmPlayerMeta({
+          title: studyAudioTitle,
+          sub: studyArtist ? `${studyArtist} · Trusicas` : "A estudar com a letra",
+        });
       }
       mountHtmlAudioElement(host, server.play_url);
       return true;
@@ -3980,6 +4282,9 @@ document.addEventListener("keydown", (ev) => {
 });
 
 setLyricsInputMode("paste");
+bindYmPlayerUi();
+bindYmPlayerExpandGesture();
+syncYmPlayerChrome();
 shareToken = detectShareMode();
 shareMode = Boolean(shareToken);
 refreshAuth();
