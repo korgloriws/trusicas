@@ -428,22 +428,25 @@ def set_lesson_youtube(
             SET youtube_video_id = ?, youtube_title = ?
             WHERE id = ? AND user_id = ?
             """,
-            (vid, title, lesson_id, user_id),
+            (vid, title, int(lesson_id), int(user_id)),
         )
         if cur.rowcount == 0:
             return None
+        conn.commit()
         row = conn.execute(
             """
             SELECT title_hint, artist_hint, youtube_video_id, youtube_title
             FROM lessons WHERE id = ? AND user_id = ?
             """,
-            (lesson_id, user_id),
+            (int(lesson_id), int(user_id)),
         ).fetchone()
-        conn.commit()
     if row is None:
         return None
     out_id = str(row["youtube_video_id"] or "").strip() or None
     out_title = str(row["youtube_title"] or "").strip() or None
+    # Confirma que o valor pedido ficou gravado
+    if vid is not None and out_id != vid:
+        return None
     if out_id:
         save_shared_youtube(
             title=row["title_hint"],
@@ -452,7 +455,7 @@ def set_lesson_youtube(
             video_title=out_title,
         )
     return {
-        "id": lesson_id,
+        "id": int(lesson_id),
         "youtube_video_id": out_id,
         "youtube_title": out_title,
     }

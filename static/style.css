@@ -2086,6 +2086,48 @@ html[data-theme="light"] .playlist-bar {
   margin-top: 0.35rem;
 }
 
+.audio-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0.75rem 0 0.35rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent, #3d8bfd) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent, #3d8bfd) 10%, var(--bg-elevated));
+  color: var(--text, inherit);
+  font-size: 0.9rem;
+}
+
+.audio-loading.hidden {
+  display: none;
+}
+
+.audio-loading-spinner {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent, #3d8bfd) 25%, transparent);
+  border-top-color: var(--accent, #3d8bfd);
+  animation: audio-spin 0.75s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes audio-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.audio-surface.is-audio-loading .audio-player-shell {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.audio-surface.is-audio-loading #btn-audio-search {
+  opacity: 0.6;
+}
+
 .audio-player-frame-yt {
   position: relative;
   width: 100%;

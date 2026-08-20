@@ -311,11 +311,15 @@
         <div class="audio-head">
           <div class="audio-head-copy">
             <h3 class="audio-title">Áudio da música</h3>
-            <p class="audio-desc">Ouve na Aula sem sair do Trusicas.</p>
+            <p class="audio-desc">Busca a faixa e converte o áudio (MP3) para ouvir na Aula.</p>
           </div>
           <div class="audio-head-actions">
             <button type="button" id="btn-audio-search" class="btn btn-secondary btn-sm">Buscar áudio</button>
           </div>
+        </div>
+        <div id="audio-loading" class="audio-loading hidden" role="status" aria-live="polite">
+          <span class="audio-loading-spinner" aria-hidden="true"></span>
+          <span id="audio-loading-text">A buscar e converter áudio…</span>
         </div>
         <div id="audio-player-shell" class="audio-player-shell hidden">
           <div class="audio-player-frame">

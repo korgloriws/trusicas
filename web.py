@@ -19,12 +19,15 @@ from auth import (
 from fetch_audius import audius_stream_url, is_audius_track_id, search_audius
 from fetch_cifra import fetch_cifra
 from fetch_lyrics import fetch_lyrics
+from audio_harness import run_audio_harness
 from fetch_youtube import (
     clear_youtube_cookies_file,
+    convert_share_link_to_mp3,
     extract_youtube_video_id,
     resolve_youtube_audio,
     save_youtube_cookies_text,
     search_youtube,
+    search_youtube_scrape,
     youtube_cookies_configured,
 )
 from generate import generate_lesson
@@ -692,6 +695,233 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "track_id inválido."}), 400
         return redirect(audius_stream_url(tid), code=302)
 
+    @app.post("/api/audio/harness")
+    @require_login
+    def api_audio_harness():
+        """
+        Agente harness: busca (ytsearch) + escolhe faixa + converte MP3 local.
+        Body: title, artist, lesson_id?, url?, video_id?, force?, use_llm?
+        """
+        payload = request.get_json(silent=True) or {}
+        title = str(payload.get("title") or "").strip()
+        artist = str(payload.get("artist") or "").strip()
+        share_url = str(payload.get("url") or payload.get("share_url") or "").strip() or None
+        video_id = str(payload.get("video_id") or "").strip() or None
+        force = bool(payload.get("force"))
+        use_llm = payload.get("use_llm")
+        if use_llm is None:
+            use_llm = True
+        uid = _uid()
+        lesson_id: int | None = None
+        raw_id = payload.get("lesson_id")
+        if raw_id is not None and str(raw_id).strip() != "":
+            try:
+                lesson_id = int(raw_id)
+            except (TypeError, ValueError):
+                lesson_id = None
+
+        if not force and not share_url and not video_id and lesson_id is not None:
+            owned = get_lesson(lesson_id, user_id=uid)
+            if owned is None:
+                return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+            saved_vid = str(owned.get("youtube_video_id") or "").strip()
+            if not saved_vid:
+                saved_vid = str(owned.get("audio_track_id") or "").strip()
+                src = str(owned.get("audio_source") or "").strip().lower()
+                if src and src not in {"youtube_mp3", "youtube"}:
+                    saved_vid = ""
+            if saved_vid:
+                converted = convert_share_link_to_mp3(saved_vid)
+                if not converted.ok:
+                    converted_alt = resolve_youtube_audio(saved_vid)
+                    if converted_alt.ok:
+                        converted = converted_alt
+                if converted.ok and converted.local_path:
+                    title_saved = (
+                        owned.get("youtube_title")
+                        or owned.get("audio_title")
+                        or converted.title
+                    )
+                    # Reafirma persistência na lição
+                    saved = set_lesson_youtube(
+                        lesson_id,
+                        user_id=uid,
+                        video_id=saved_vid,
+                        video_title=title_saved,
+                    )
+                    set_lesson_audio(
+                        lesson_id,
+                        user_id=uid,
+                        track_id=saved_vid,
+                        track_title=title_saved,
+                        source="youtube_mp3",
+                    )
+                    return jsonify(
+                        {
+                            "ok": True,
+                            "video_id": saved_vid,
+                            "title": title_saved,
+                            "channel_title": "",
+                            "url": f"https://www.youtube.com/watch?v={saved_vid}",
+                            "play_url": f"/api/youtube/media/{saved_vid}",
+                            "mime": converted.mime or "audio/mpeg",
+                            "ext": converted.ext or "mp3",
+                            "from_cache": True,
+                            "from_lesson": True,
+                            "candidates": [],
+                            "steps": [
+                                {
+                                    "tool": "lesson_saved",
+                                    "ok": True,
+                                    "detail": saved_vid,
+                                }
+                            ],
+                            "saved": saved,
+                            "picker": "lesson",
+                        }
+                    )
+
+        if not force and not share_url and not video_id and title and artist:
+            cached = find_shared_youtube(title, artist)
+            if cached:
+                vid = cached["video_id"]
+                converted = convert_share_link_to_mp3(vid)
+                if converted.ok and converted.local_path:
+                    saved = None
+                    if lesson_id is not None:
+                        if get_lesson(lesson_id, user_id=uid) is None:
+                            return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+                        saved = set_lesson_youtube(
+                            lesson_id,
+                            user_id=uid,
+                            video_id=vid,
+                            video_title=cached.get("video_title") or None,
+                        )
+                        if saved is None:
+                            return (
+                                jsonify(
+                                    {
+                                        "ok": False,
+                                        "error": "Áudio obtido, mas falhou ao gravar na lição.",
+                                    }
+                                ),
+                                500,
+                            )
+                        set_lesson_audio(
+                            lesson_id,
+                            user_id=uid,
+                            track_id=vid,
+                            track_title=cached.get("video_title") or converted.title,
+                            source="youtube_mp3",
+                        )
+                    return jsonify(
+                        {
+                            "ok": True,
+                            "video_id": vid,
+                            "title": cached.get("video_title") or converted.title,
+                            "channel_title": cached.get("channel_title") or "",
+                            "url": f"https://www.youtube.com/watch?v={vid}",
+                            "play_url": f"/api/youtube/media/{vid}",
+                            "mime": converted.mime or "audio/mpeg",
+                            "ext": converted.ext or "mp3",
+                            "from_cache": True,
+                            "candidates": [
+                                {
+                                    "video_id": vid,
+                                    "title": cached.get("video_title") or vid,
+                                    "channel_title": cached.get("channel_title") or "",
+                                    "url": f"https://www.youtube.com/watch?v={vid}",
+                                }
+                            ],
+                            "steps": [{"tool": "cache", "ok": True, "detail": "youtube_cache"}],
+                            "saved": saved,
+                            "picker": "cache",
+                        }
+                    )
+
+        result = run_audio_harness(
+            title=title,
+            artist=artist,
+            share_url=share_url,
+            video_id=video_id,
+            use_llm_picker=bool(use_llm),
+        )
+        steps = [
+            {"tool": s.tool, "ok": s.ok, "detail": s.detail, **({"data": s.data} if s.data else {})}
+            for s in result.steps
+        ]
+        if not result.ok or not result.video_id or not result.play_url:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": result.error or "Harness não encontrou áudio.",
+                        "candidates": result.candidates or [],
+                        "steps": steps,
+                        "needs_cookies": not youtube_cookies_configured(),
+                        "cookies_configured": youtube_cookies_configured(),
+                    }
+                ),
+                404,
+            )
+
+        if title and artist:
+            save_shared_youtube(
+                title=title,
+                artist=artist,
+                video_id=result.video_id,
+                video_title=result.title,
+                channel_title=result.channel_title,
+            )
+        saved = None
+        if lesson_id is not None:
+            if get_lesson(lesson_id, user_id=uid) is None:
+                return jsonify({"ok": False, "error": "Lição não encontrada."}), 404
+            saved = set_lesson_youtube(
+                lesson_id,
+                user_id=uid,
+                video_id=result.video_id,
+                video_title=result.title,
+            )
+            if saved is None:
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error": "Áudio convertido, mas falhou ao gravar na lição (youtube_video_id).",
+                            "video_id": result.video_id,
+                            "play_url": result.play_url,
+                        }
+                    ),
+                    500,
+                )
+            set_lesson_audio(
+                lesson_id,
+                user_id=uid,
+                track_id=result.video_id,
+                track_title=result.title,
+                source="youtube_mp3",
+            )
+
+        return jsonify(
+            {
+                "ok": True,
+                "video_id": result.video_id,
+                "title": result.title,
+                "channel_title": result.channel_title,
+                "url": result.url,
+                "play_url": result.play_url,
+                "mime": result.mime,
+                "ext": result.ext,
+                "from_cache": False,
+                "candidates": result.candidates or [],
+                "steps": steps,
+                "picker": result.picker,
+                "saved": saved,
+                "cookies_configured": youtube_cookies_configured(),
+            }
+        )
+
     @app.post("/api/youtube/search")
     @require_login
     def api_youtube_search():
@@ -743,7 +973,10 @@ def create_app() -> Flask:
                 }
             )
 
-        result = search_youtube(title, artist)
+        # Prefer scraping (sem API key); fallback Data API se configurada
+        result = search_youtube_scrape(title, artist)
+        if not result.ok or not result.video_id:
+            result = search_youtube(title, artist)
         if not result.ok or not result.video_id:
             return (
                 jsonify(
@@ -833,6 +1066,11 @@ def create_app() -> Flask:
         if not video_id:
             return jsonify({"ok": False, "error": "Indique um video_id ou URL YouTube."}), 400
         result = resolve_youtube_audio(video_id)
+        # Preferir MP3 do conversor interno quando possível
+        if result.ok and str(result.ext or "").lower() != "mp3":
+            mp3 = convert_share_link_to_mp3(video_id)
+            if mp3.ok:
+                result = mp3
         cookies_ok = youtube_cookies_configured()
         if not result.ok or not result.local_path:
             err = result.error or "Áudio indisponível."

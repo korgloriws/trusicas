@@ -109,20 +109,16 @@ def extract_youtube_video_id(raw: str | None) -> str | None:
     return None
 
 
-def _score_hit(item: dict[str, Any], *, title: str, artist: str) -> int:
-    snippet = item.get("snippet") if isinstance(item.get("snippet"), dict) else {}
-    vid_title = str(snippet.get("title") or "").strip()
-    channel = str(snippet.get("channelTitle") or "").strip()
+def _score_title_channel(vid_title: str, channel: str, *, title: str, artist: str) -> int:
     title_l = title.strip().lower()
     artist_l = artist.strip().lower()
-    vt = vid_title.lower()
-    ch = channel.lower()
+    vt = (vid_title or "").lower()
+    ch = (channel or "").lower()
 
     score = 0
     if title_l and title_l in vt:
         score += 8
     elif title_l:
-        # palavras do título presentes
         words = [w for w in re.split(r"\W+", title_l) if len(w) > 2]
         hits = sum(1 for w in words if w in vt)
         score += min(6, hits * 2)
@@ -136,7 +132,6 @@ def _score_hit(item: dict[str, Any], *, title: str, artist: str) -> int:
         hits = sum(1 for w in words if w in vt or w in ch)
         score += min(5, hits * 2)
 
-    # Preferências úteis para estudar letra
     if "official audio" in vt or "official video" in vt:
         score += 5
     if "official" in vt:
@@ -148,7 +143,6 @@ def _score_hit(item: dict[str, Any], *, title: str, artist: str) -> int:
     if "vevo" in ch:
         score += 3
 
-    # Penalizações
     for bad in ("karaoke", "instrumental", "cover", "reaction", "remix", "nightcore", "8d audio"):
         if bad in vt:
             score -= 6
@@ -156,6 +150,16 @@ def _score_hit(item: dict[str, Any], *, title: str, artist: str) -> int:
         score -= 2
 
     return score
+
+
+def _score_hit(item: dict[str, Any], *, title: str, artist: str) -> int:
+    snippet = item.get("snippet") if isinstance(item.get("snippet"), dict) else {}
+    return _score_title_channel(
+        str(snippet.get("title") or "").strip(),
+        str(snippet.get("channelTitle") or "").strip(),
+        title=title,
+        artist=artist,
+    )
 
 
 def search_youtube(title: str, artist: str, *, max_results: int = 8) -> YoutubeSearchResult:
@@ -482,16 +486,16 @@ def _mime_for_ext(ext: str | None) -> str | None:
 def _find_cached_audio(vid: str) -> Path | None:
     if not _AUDIO_CACHE_DIR.is_dir():
         return None
-    matches = sorted(
-        (
-            p
-            for p in _AUDIO_CACHE_DIR.glob(f"{vid}.*")
-            if p.is_file() and p.stat().st_size > 1024 and not p.name.endswith(".part")
-        ),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return matches[0] if matches else None
+    matches = [
+        p
+        for p in _AUDIO_CACHE_DIR.glob(f"{vid}.*")
+        if p.is_file() and p.stat().st_size > 1024 and not p.name.endswith(".part")
+    ]
+    if not matches:
+        return None
+    mp3 = [p for p in matches if p.suffix.lower() == ".mp3"]
+    pool = mp3 or matches
+    return sorted(pool, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
 
 def _result_from_cache(path: Path, *, title: str | None = None) -> YoutubeAudioResult:
@@ -729,4 +733,252 @@ def resolve_youtube_audio(video_id: str) -> YoutubeAudioResult:
     if result.ok and result.local_path:
         _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
     return result
+
+def search_youtube_scrape(title: str, artist: str, *, max_results: int = 8) -> YoutubeSearchResult:
+    """Busca via yt-dlp ytsearch (sem YouTube Data API)."""
+    ensure_env_loaded()
+    t = str(title or "").strip()
+    a = str(artist or "").strip()
+    if not t or not a:
+        return YoutubeSearchResult(
+            ok=False,
+            error="Indique o título e o artista para buscar no YouTube.",
+        )
+    try:
+        import yt_dlp
+    except ImportError:
+        return YoutubeSearchResult(
+            ok=False,
+            error="Dependência yt-dlp em falta. Instale com: pip install yt-dlp",
+        )
+
+    query = f"{a} {t} official audio"
+    n = max(3, min(int(max_results), 15))
+    cookies_file = _resolve_cookies_file()
+    proxy = _youtube_proxy()
+    ydl_opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": "in_playlist",
+        "noplaylist": True,
+    }
+    if cookies_file:
+        ydl_opts["cookiefile"] = cookies_file
+    if proxy:
+        ydl_opts["proxy"] = proxy
+
+    scored: list[YoutubeVideoHit] = []
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{n}:{query}", download=False)
+    except Exception as e:
+        return YoutubeSearchResult(ok=False, error=f"Falha na busca YouTube: {e}")
+
+    entries: list[dict[str, Any]] = []
+    if isinstance(info, dict):
+        raw = info.get("entries")
+        if isinstance(raw, list):
+            entries = [e for e in raw if isinstance(e, dict)]
+
+    for entry in entries:
+        video_id = str(entry.get("id") or "").strip()
+        if not _VIDEO_ID_RE.fullmatch(video_id):
+            video_id = (
+                extract_youtube_video_id(
+                    str(entry.get("url") or entry.get("webpage_url") or "")
+                )
+                or ""
+            )
+        if not _VIDEO_ID_RE.fullmatch(video_id):
+            continue
+        vid_title = str(entry.get("title") or "").strip() or video_id
+        channel = str(
+            entry.get("channel") or entry.get("uploader") or entry.get("channel_id") or ""
+        ).strip()
+        score = _score_title_channel(vid_title, channel, title=t, artist=a)
+        scored.append(
+            YoutubeVideoHit(
+                video_id=video_id,
+                title=vid_title,
+                channel_title=channel,
+                score=score,
+            )
+        )
+
+    if not scored:
+        return YoutubeSearchResult(
+            ok=False,
+            error="Nenhum vídeo encontrado para esta música.",
+            candidates=[],
+        )
+
+    scored.sort(key=lambda h: h.score, reverse=True)
+    best = scored[0]
+    candidates = [
+        {
+            "video_id": h.video_id,
+            "title": h.title,
+            "channel_title": h.channel_title,
+            "url": f"https://www.youtube.com/watch?v={h.video_id}",
+            "score": h.score,
+        }
+        for h in scored
+    ]
+    return YoutubeSearchResult(
+        ok=True,
+        video_id=best.video_id,
+        title=best.title,
+        channel_title=best.channel_title,
+        candidates=candidates,
+    )
+
+
+def _ffmpeg_to_mp3(src: Path, dest: Path) -> YoutubeAudioResult:
+    import shutil
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return YoutubeAudioResult(ok=False, error="ffmpeg não está instalado no servidor.")
+    try:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(src),
+                "-vn",
+                "-acodec",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                str(dest),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=180,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        return YoutubeAudioResult(ok=False, error=f"ffmpeg falhou: {e}")
+    if not dest.is_file() or dest.stat().st_size < 1024:
+        return YoutubeAudioResult(ok=False, error="MP3 gerado está vazio.")
+    return _result_from_cache(dest)
+
+
+def convert_share_link_to_mp3(url_or_id: str) -> YoutubeAudioResult:
+    """Descarrega áudio de um link/id YouTube e converte para MP3 (ffmpeg)."""
+    import time
+
+    vid = extract_youtube_video_id(url_or_id)
+    if not vid:
+        return YoutubeAudioResult(ok=False, error="Link de partilha / video_id inválido.")
+
+    now = time.time()
+    cached_mem = _audio_url_cache.get(vid)
+    if (
+        cached_mem
+        and cached_mem[0] > now
+        and cached_mem[1].ok
+        and cached_mem[1].local_path
+        and Path(cached_mem[1].local_path).is_file()
+        and str(cached_mem[1].ext or "").lower() == "mp3"
+    ):
+        return cached_mem[1]
+
+    mp3_path = _AUDIO_CACHE_DIR / f"{vid}.mp3"
+    if mp3_path.is_file() and mp3_path.stat().st_size > 1024:
+        result = _result_from_cache(mp3_path)
+        _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
+        return result
+
+    try:
+        import yt_dlp
+    except ImportError:
+        return YoutubeAudioResult(
+            ok=False,
+            error="Dependência yt-dlp em falta. Instale com: pip install yt-dlp",
+        )
+
+    page_url = f"https://www.youtube.com/watch?v={vid}"
+    cookies_file = _resolve_cookies_file()
+    proxy = _youtube_proxy()
+    _AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    outtmpl = str(_AUDIO_CACHE_DIR / f"{vid}.%(ext)s")
+    last_error = ""
+    saw_bot_block = False
+
+    for clients in _PLAYER_CLIENT_ATTEMPTS:
+        for fmt in _FORMAT_ATTEMPTS:
+            ydl_opts: dict[str, Any] = {
+                "format": fmt,
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "outtmpl": outtmpl,
+                "overwrites": True,
+                "extractor_args": {"youtube": {"player_client": list(clients)}},
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }
+                ],
+            }
+            if cookies_file:
+                ydl_opts["cookiefile"] = cookies_file
+            if proxy:
+                ydl_opts["proxy"] = proxy
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(page_url, download=True)
+            except Exception as e:
+                last_error = str(e)
+                if _is_bot_block_error(last_error):
+                    saw_bot_block = True
+                for junk in _AUDIO_CACHE_DIR.glob(f"{vid}.*"):
+                    if junk.suffix == ".part" or junk.stat().st_size < 512:
+                        try:
+                            junk.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                continue
+
+            if mp3_path.is_file() and mp3_path.stat().st_size > 1024:
+                title = None
+                if isinstance(info, dict):
+                    title = str(info.get("title") or "").strip() or None
+                result = _result_from_cache(mp3_path, title=title)
+                _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
+                return result
+
+            cached = _find_cached_audio(vid)
+            if cached:
+                remuxed = _ffmpeg_to_mp3(cached, mp3_path)
+                if remuxed.ok:
+                    if isinstance(info, dict):
+                        remuxed.title = str(info.get("title") or "").strip() or remuxed.title
+                    _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, remuxed)
+                    return remuxed
+                result = _result_from_cache(cached)
+                _audio_url_cache[vid] = (now + _AUDIO_CACHE_TTL_S, result)
+                return result
+            last_error = "yt-dlp não gravou o MP3."
+
+    if saw_bot_block and not cookies_file:
+        return YoutubeAudioResult(ok=False, error=_BOT_BLOCK_HINT)
+    if saw_bot_block:
+        return YoutubeAudioResult(
+            ok=False,
+            error=(
+                "O YouTube ainda bloqueia o áudio mesmo com cookies. "
+                "Actualize data/youtube.cookies.txt e reinicie. "
+                f"Detalhe: {last_error}"
+            ),
+        )
+    return YoutubeAudioResult(
+        ok=False,
+        error=f"Não foi possível converter para MP3: {last_error or 'erro desconhecido'}",
+    )
 
