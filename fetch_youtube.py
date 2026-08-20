@@ -21,15 +21,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 _AUDIO_CACHE_DIR = _PROJECT_ROOT / "data" / "yt_audio"
 _ENV_COOKIES_PATH = _PROJECT_ROOT / "data" / ".youtube.cookies.from_env.txt"
 
-# Clientes yt-dlp — () = default do yt-dlp; mobile/tv costumam falhar menos em VPS.
+# Clientes yt-dlp — android/ios/tv evitam parte dos desafios JS; default precisa de Deno+EJS.
 _PLAYER_CLIENT_ATTEMPTS: tuple[tuple[str, ...], ...] = (
-    (),
     ("android",),
     ("ios",),
     ("tv",),
+    ("android_music",),
     ("mweb",),
-    ("android_music", "android"),
-    ("tv_embedded", "tv"),
+    (),
     ("web",),
 )
 
@@ -41,7 +40,6 @@ _FORMAT_ATTEMPTS: tuple[str | None, ...] = (
     "140/251/250/249/bestaudio/best",
     "18/22/bestaudio/best",
     "best",
-    "worst",
 )
 
 # Instâncias públicas (falham com frequência; só fallback).
@@ -58,7 +56,8 @@ _PIPED_STREAM_APIS = (
 _BOT_BLOCK_HINT = (
     "O YouTube bloqueou o IP deste servidor. Coloque o ficheiro Netscape em "
     "data/youtube.cookies.txt (ex.: /opt/trusicas/data/youtube.cookies.txt) "
-    "ou defina YOUTUBE_COOKIES_B64 no .env, e reinicie o contentor."
+    "ou defina YOUTUBE_COOKIES_B64 no .env, e reinicie o contentor. "
+    "A imagem Docker precisa de Deno + yt-dlp[default] (EJS) para áudio."
 )
 
 
@@ -539,6 +538,9 @@ def _ytdlp_base_opts(
         "noplaylist": True,
         "outtmpl": outtmpl,
         "overwrites": True,
+        # YouTube exige runtime JS (Deno) + scripts EJS para desbloquear formatos de áudio.
+        "remote_components": ["ejs:github"],
+        "js_runtimes": {"deno": {}},
     }
     if fmt:
         ydl_opts["format"] = fmt
